@@ -19,7 +19,7 @@ This document defines CLI commands, flags, output formats, and exit codes.
 
 ### `catalog init [--preset macos-user-additions|macos-deep]`
 
-- Creates config and DB if missing.
+- Creates config and store if missing.
 - Writes preset roots to config when `--preset` is provided.
 - No indexing occurs.
 
@@ -42,7 +42,7 @@ catalog init --preset macos-user-additions
 ### `catalog rm <path>...`
 
 - Removes one or more roots from config.
-- Does not delete DB rows.
+- Purges store entries for removed roots.
 
 ### `catalog index [--full] [--one-filesystem]`
 
@@ -79,6 +79,13 @@ catalog search launch --after 2024-01-01 --root ~/Library/LaunchAgents
 
 - Lists tags and counts.
 
+### `catalog watch [--interval N] [--full] [--one-filesystem]`
+
+- Polls for changes and re-indexes on an interval.
+- Default interval: 30 seconds.
+- `--full` forces full rescan every interval.
+- `--one-filesystem` overrides config for this run.
+
 ---
 
 ## Output Formats
@@ -109,4 +116,3 @@ catalog search launch --after 2024-01-01 --root ~/Library/LaunchAgents
 - Keep messages concise.
 - Include actionable hints.
 - Do not print stack traces by default.
-

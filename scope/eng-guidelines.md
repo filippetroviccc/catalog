@@ -12,8 +12,8 @@ Core components and responsibilities:
 - Config + presets: config file load/save, preset expansion, validation, and defaults.
 - Roots manager: add/remove/list roots, one-filesystem policy, excludes, last index time.
 - Indexer: walks files, computes metadata, performs incremental updates, soft deletes.
-- DB layer: SQLite schema, migrations, prepared queries, transactions, indexing.
-- Search engine: SQL queries for substring search + filters (ext, tag, size, time, root).
+- Store layer: JSON load/save, atomic writes, ID counters, and in-memory views.
+- Search engine: in-memory substring search + filters (ext, tag, size, time, root).
 - Tagging: tags table + join table, add/remove/list.
 - Output: plain or JSON, stable schema for scripting.
 - Logging: warnings, permission errors, summary per index run.
@@ -24,17 +24,17 @@ Core components and responsibilities:
 
 ### Data Flow
 
-1. CLI parses command -> loads config + DB -> invokes component.
+1. CLI parses command -> loads config + store -> invokes component.
 2. Index run: compile ignore rules -> walk roots -> upsert file rows -> mark missing as deleted -> update root timestamps.
-3. Search: parse query + filters -> SQL -> format output.
+3. Search: parse query + filters -> in-memory filter -> format output.
 
 ### Config
 
 Suggested defaults (explicit, macOS-first):
 
 - Config path: `~/Library/Application Support/catalog/config.toml`
-- DB path: `~/Library/Application Support/catalog/catalog.db`
-- Env overrides: `CATALOG_CONFIG`, `CATALOG_DB`
+- Store path: `~/Library/Application Support/catalog/catalog.json`
+- Env overrides: `CATALOG_CONFIG`, `CATALOG_STORE` (legacy `CATALOG_DB`)
 - Config schema (TOML):
   - `roots = ["..."]`
   - `excludes = ["**/.git/**", "**/node_modules/**", ...]`
@@ -51,55 +51,36 @@ On `init --preset`:
 - Expand `~` to home.
 - Ignore missing roots; only include existing paths in config.
 
-### SQLite Schema
+### Store Schema
 
-Minimal schema from PRD plus two operational fields for incremental indexing:
+See `scope/schema.md` for the JSON store layout. Core collections:
 
-- `roots(id, path, added_at, preset_name, last_indexed_at, one_filesystem)`
-- `files(id, root_id, rel_path, abs_path, is_dir, is_symlink, size, mtime, ext, status, last_seen_run)`
-- `tags(id, name UNIQUE)`
-- `file_tags(file_id, tag_id, UNIQUE(file_id, tag_id))`
-- `index_runs(id, started_at, finished_at)`
-
-### Indexes
-
-Required for speed:
-
-- `files(root_id, rel_path)` UNIQUE
-- `files(status)`
-- `files(mtime)`
-- `files(ext)`
-- `files(abs_path)` or `files(rel_path)` with `COLLATE NOCASE`
-- `file_tags(tag_id)`
-- `file_tags(file_id)`
+- `roots`
+- `files`
+- `tags`
+- `file_tags`
 
 ### Search Query Strategy
 
-Case-insensitive substring on filename/path:
+Case-insensitive substring on filename/path with in-memory filtering:
 
-- Use `LOWER(abs_path) LIKE ?` with `COLLATE NOCASE`, or store `abs_path_lc`.
-- Filter by:
-  - `ext IN (...)`
-  - `mtime` range
-  - `size` range
-  - `root_id`
-  - tag join via `file_tags`
+- Lowercase the query and candidate path.
+- Filter by `ext`, `mtime` range, `size` range, `root_id`, and tags.
 - Always filter `status='active'`.
 
 ### Indexing Algorithm (Incremental)
 
-Per root, single transaction per root or per run:
+Per root:
 
-1. Start `index_run` row -> get `run_id`.
+1. Increment a `run_id`.
 2. Walk root with `walkdir`, `follow_links(false)`.
 3. Skip entries using ignore rules and `include_hidden`.
 4. For each entry:
    - Compute `rel_path`, `abs_path`, `ext`, `is_dir`, `is_symlink`, `size`, `mtime`.
-   - Upsert row keyed by `(root_id, rel_path)`.
-   - If unchanged `(size, mtime)` -> update `last_seen_run = run_id` only.
-   - Else update metadata fields + `last_seen_run = run_id`.
+   - Upsert file keyed by `(root_id, rel_path)` in memory.
+   - Update `last_seen_run = run_id` and `status = active`.
 5. After walk, mark missing:
-   - `UPDATE files SET status='deleted' WHERE root_id=? AND last_seen_run != run_id`
+   - For files in the root with `last_seen_run != run_id`, set `status = deleted`.
 6. Update `roots.last_indexed_at`.
 
 ### Deletions
@@ -121,7 +102,7 @@ Default: do not follow. Index symlink itself with `is_symlink = true`. Never tra
 - Never index outside configured roots.
 - Always apply excludes before descending into a directory.
 - `index` must be deterministic and local-only.
-- `search` must be <100ms for typical DB sizes.
+- `search` must be <100ms for typical store sizes.
 
 ### Behavioral Rules
 
@@ -138,16 +119,15 @@ Default: do not follow. Index symlink itself with `is_symlink = true`. Never tra
 
 ### Performance Rules
 
-- Use SQLite WAL mode.
-- Use prepared statements.
-- Use transactions for batch updates.
-- Avoid reading huge directory metadata into memory. Streaming walk.
+- Stream directory traversal; avoid building large temporary lists beyond the store itself.
+- Keep searches in-memory and avoid unnecessary full-store rewrites.
+- Use atomic writes when persisting the JSON snapshot.
 
 ### Extensibility Rules
 
-- Keep schema migrations explicit and versioned.
-- Add new fields with migrations only.
-- Do not repurpose columns across versions.
+- Keep store versions explicit and versioned.
+- Add new fields with version bumps and defaults.
+- Do not repurpose fields across versions.
 
 ---
 
@@ -162,13 +142,13 @@ Default: do not follow. Index symlink itself with `is_symlink = true`. Never tra
 - `src/roots.rs`
   - Add/remove/list roots and validation logic.
 - `src/indexer.rs`
-  - Directory walk and DB updates.
+  - Directory walk and store updates.
 - `src/ignore.rs`
   - Exclude matcher using `ignore` crate.
-- `src/db.rs`
-  - Connection setup, migrations, prepared statements.
+- `src/store.rs`
+  - JSON store load/save, atomic writes, ID counters.
 - `src/search.rs`
-  - Search SQL builder and query execution.
+  - In-memory search filters and query execution.
 - `src/tags.rs`
   - Tag CRUD.
 - `src/output.rs`
@@ -180,7 +160,7 @@ Default: do not follow. Index symlink itself with `is_symlink = true`. Never tra
 
 ### `catalog init [--preset ...]`
 
-- Create config + DB in default locations.
+- Create config + store in default locations.
 - Store preset name in config for traceability.
 
 ### `catalog roots`
@@ -194,7 +174,7 @@ Default: do not follow. Index symlink itself with `is_symlink = true`. Never tra
 
 ### `catalog rm <path>...`
 
-- Remove from config only, do not delete DB rows.
+- Remove from config and purge store entries for removed roots.
 
 ### `catalog index [--full] [--one-filesystem]`
 
@@ -223,7 +203,7 @@ Default: do not follow. Index symlink itself with `is_symlink = true`. Never tra
 
 - User errors: return `1` with a concise message and example usage.
 - Permission errors: warn once per root or aggregate count.
-- DB errors: return `2` and print the sqlite error code.
+- Storage errors: return `2` with a concise message and path context.
 
 ---
 
@@ -243,7 +223,6 @@ Default: do not follow. Index symlink itself with `is_symlink = true`. Never tra
 
 ## Open Decisions (Make Explicit Early)
 
-- Config + DB location: recommended `~/Library/Application Support/catalog/`.
+- Config + store location: recommended `~/Library/Application Support/catalog/`.
 - Path normalization: store `abs_path` as joined root + rel path without canonicalizing.
 - Tag normalization: lowercase on insert for uniqueness.
-

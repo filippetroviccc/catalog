@@ -14,10 +14,9 @@ This document defines performance budgets and constraints for MVP.
 
 ## Constraints
 
-- Avoid loading all paths into memory.
+- Avoid duplicating the full store in memory beyond the snapshot.
 - Use streaming directory walk.
-- Use prepared statements and transactions.
-- Use WAL mode for SQLite.
+- Use atomic writes when persisting the JSON store.
 
 ---
 
@@ -26,4 +25,3 @@ This document defines performance budgets and constraints for MVP.
 - Benchmark search with 100k, 250k, and 500k records.
 - Benchmark incremental index when no files change.
 - Record cold start and warm start times.
-

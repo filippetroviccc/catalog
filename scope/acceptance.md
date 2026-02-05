@@ -10,7 +10,7 @@ The MVP is complete when all items below are met.
 
 ### Core Commands
 
-- `catalog init` creates config and DB in default locations.
+- `catalog init` creates config and store in default locations.
 - `catalog init --preset macos-user-additions` expands preset roots and writes them to config.
 - `catalog roots` prints configured roots, excludes, and last index time.
 - `catalog add <path>...` adds roots to config and persists.
@@ -27,7 +27,7 @@ The MVP is complete when all items below are met.
 
 - Indexing is metadata-only. No file contents are read.
 - Indexing is incremental based on `size` and `mtime`.
-- Missing files are soft deleted, not removed from DB.
+- Missing files are soft deleted, not removed from store.
 - Symlinks are not followed by default; the symlink itself may be indexed.
 - Excludes are applied before descending into directories.
 - Permission errors do not abort indexing; they are logged and summarized.
@@ -49,7 +49,7 @@ The MVP is complete when all items below are met.
 
 ### In Scope (MVP)
 
-- macOS-first CLI with SQLite storage.
+- macOS-first CLI with JSON store on disk.
 - Presets for macOS user additions.
 - Incremental indexing, search, recent, tags.
 - Config in TOML.
@@ -67,4 +67,3 @@ The MVP is complete when all items below are met.
 - `catalog watch` for filesystem notifications.
 - Rename and move detection using inode/device.
 - Optional FTS for content search.
-

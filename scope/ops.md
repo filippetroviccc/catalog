@@ -21,8 +21,8 @@ This document defines logging, error handling, and operational behavior.
 
 ## Crash and Recovery
 
-- DB is updated in transactions.
-- Partial index runs should not corrupt the DB.
+- Store writes are atomic (write temp, fsync, rename).
+- Partial index runs should not corrupt the store.
 
 ---
 
@@ -30,4 +30,3 @@ This document defines logging, error handling, and operational behavior.
 
 - JSON output fields and types must remain stable within a major version.
 - Plain output columns remain stable within a major version.
-
