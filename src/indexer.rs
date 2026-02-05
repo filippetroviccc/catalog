@@ -1,12 +1,14 @@
 use crate::config::Config;
 use crate::roots;
-use crate::util::{path_to_string, normalize_path_allow_missing};
+use crate::store::{FileEntry, Store};
+use crate::util::{normalize_path_allow_missing, path_to_string};
 use anyhow::Result;
 use chrono::Local;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use rusqlite::Connection;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use walkdir::{DirEntry, WalkDir};
 
 pub struct IndexStats {
@@ -16,6 +18,26 @@ pub struct IndexStats {
     pub skipped: usize,
 }
 
+#[derive(Debug)]
+struct ScannedFile {
+    rel_path: String,
+    abs_path: String,
+    is_dir: bool,
+    is_symlink: bool,
+    size: i64,
+    mtime: i64,
+    ext: Option<String>,
+}
+
+struct RootScanResult {
+    root_id: i64,
+    root_path: String,
+    files: Vec<ScannedFile>,
+    stats: IndexStats,
+    duration: Duration,
+    root_missing: bool,
+}
+
 struct IgnoreMatcher {
     gitignore: Gitignore,
     abs_excludes: Vec<PathBuf>,
@@ -23,45 +45,68 @@ struct IgnoreMatcher {
 }
 
 pub fn run(
-    conn: &Connection,
+    store: &mut Store,
     cfg: &Config,
     full: bool,
     one_filesystem_override: bool,
 ) -> Result<IndexStats> {
-    roots::sync_roots(conn, cfg, None)?;
-
-    let start = Local::now().to_rfc3339();
-    conn.execute("INSERT INTO index_runs (started_at) VALUES (?1)", rusqlite::params![start])?;
-    let run_id: i64 = conn.last_insert_rowid();
+    roots::sync_roots(&mut store.data, cfg, None)?;
+    let run_id = store.data.next_run_id();
 
     let mut total_seen = 0;
     let mut total_updated = 0;
     let mut total_deleted = 0;
     let mut total_skipped = 0;
 
-    let roots = fetch_roots(conn)?;
+    let mut roots = store.data.roots.clone();
+    roots.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let multi = MultiProgress::new();
+    let mut bars: HashMap<i64, ProgressBar> = HashMap::new();
+    let mut handles = Vec::new();
+
     for root in roots {
-        let matcher = build_matcher(cfg, &root.path)?;
-        let mut stats = index_root(
-            conn,
-            &root.path,
-            root.id,
-            run_id,
-            full,
-            one_filesystem_override || root.one_filesystem,
-            &matcher,
-        )?;
-        total_seen += stats.seen;
-        total_updated += stats.updated;
-        total_deleted += stats.deleted;
-        total_skipped += stats.skipped;
+        let pb = multi.add(ProgressBar::new_spinner());
+        bars.insert(root.id, pb.clone());
+        let cfg = cfg.clone();
+        let root_path = root.path.clone();
+        let root_id = root.id;
+        let one_fs = one_filesystem_override || root.one_filesystem;
+        let pb_clone = pb.clone();
+        handles.push(std::thread::spawn(move || {
+            scan_root(&cfg, &root_path, root_id, one_fs, pb_clone)
+        }));
     }
 
-    let finish = Local::now().to_rfc3339();
-    conn.execute(
-        "UPDATE index_runs SET finished_at = ?1 WHERE id = ?2",
-        rusqlite::params![finish, run_id],
-    )?;
+    let mut results = Vec::new();
+    for handle in handles {
+        let res = handle.join().expect("indexer thread panicked")?;
+        results.push(res);
+    }
+
+    for result in results {
+        let deleted = merge_root(&mut store.data, &result, run_id, full);
+        total_seen += result.stats.seen;
+        total_updated += result.stats.updated;
+        total_deleted += deleted;
+        total_skipped += result.stats.skipped;
+
+        if let Some(pb) = bars.get(&result.root_id) {
+            if result.root_missing {
+                pb.finish_with_message(format!("Root missing: {}", result.root_path));
+            } else {
+                pb.finish_with_message(format!(
+                    "Finished root: {} in {:.2}s (seen {}, updated {}, deleted {}, skipped {})",
+                    result.root_path,
+                    result.duration.as_secs_f64(),
+                    result.stats.seen,
+                    result.stats.updated,
+                    deleted,
+                    result.stats.skipped
+                ));
+            }
+        }
+    }
 
     Ok(IndexStats {
         seen: total_seen,
@@ -71,73 +116,66 @@ pub fn run(
     })
 }
 
-struct RootRow {
-    id: i64,
-    path: String,
-    one_filesystem: bool,
-}
-
-fn fetch_roots(conn: &Connection) -> Result<Vec<RootRow>> {
-    let mut stmt = conn.prepare("SELECT id, path, one_filesystem FROM roots ORDER BY path")?;
-    let rows = stmt.query_map([], |row| {
-        Ok(RootRow {
-            id: row.get(0)?,
-            path: row.get(1)?,
-            one_filesystem: row.get::<_, i64>(2)? != 0,
-        })
-    })?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row?);
-    }
-    Ok(out)
-}
-
-fn index_root(
-    conn: &Connection,
+fn scan_root(
+    cfg: &Config,
     root: &str,
     root_id: i64,
-    run_id: i64,
-    full: bool,
     one_filesystem: bool,
-    matcher: &IgnoreMatcher,
-) -> Result<IndexStats> {
+    progress: ProgressBar,
+) -> Result<RootScanResult> {
     let root_path = normalize_path_allow_missing(root)?;
+    let started = Instant::now();
+
+    let style = ProgressStyle::with_template("{spinner:.green} {msg}")
+        .unwrap_or_else(|_| ProgressStyle::default_spinner());
+    progress.set_style(style);
+    progress.set_message(format!("Indexing root: {}", root));
+    progress.enable_steady_tick(Duration::from_millis(120));
+
     if !root_path.exists() {
         tracing::warn!("root missing: {}", root);
-        return Ok(IndexStats {
-            seen: 0,
-            updated: 0,
-            deleted: 0,
-            skipped: 0,
+        progress.set_message(format!("Root missing: {}", root));
+        progress.disable_steady_tick();
+        return Ok(RootScanResult {
+            root_id,
+            root_path: root.to_string(),
+            files: Vec::new(),
+            stats: IndexStats {
+                seen: 0,
+                updated: 0,
+                deleted: 0,
+                skipped: 0,
+            },
+            duration: started.elapsed(),
+            root_missing: true,
         });
     }
 
-    let tx = conn.transaction()?;
+    let matcher = build_matcher(cfg, root)?;
 
-    if full {
-        tx.execute(
-            "UPDATE files SET status = 'deleted' WHERE root_id = ?1",
-            rusqlite::params![root_id],
-        )?;
-    }
-
+    let mut files = Vec::new();
     let mut seen = 0;
     let mut updated = 0;
     let mut skipped = 0;
     let mut permission_skips = 0;
+    let mut walk_errors = 0;
+    let mut first_walk_error: Option<String> = None;
 
     let walker = WalkDir::new(&root_path)
         .follow_links(false)
         .same_file_system(one_filesystem)
         .into_iter()
-        .filter_entry(|entry| !should_skip(entry, &root_path, matcher));
+        .filter_entry(|entry| !should_skip(entry, &root_path, &matcher));
 
     for entry in walker {
         let entry = match entry {
             Ok(e) => e,
             Err(err) => {
-                tracing::warn!("walk error: {}", err);
+                walk_errors += 1;
+                if first_walk_error.is_none() {
+                    first_walk_error = Some(err.to_string());
+                }
+                tracing::debug!("walk error: {}", err);
                 skipped += 1;
                 continue;
             }
@@ -186,57 +224,132 @@ fn index_root(
         let abs_path = path_to_string(entry.path());
         let rel_path = path_to_string(rel);
 
-        tx.execute(
-            "INSERT INTO files (root_id, rel_path, abs_path, is_dir, is_symlink, size, mtime, ext, status, last_seen_run)\
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active', ?9)\
-             ON CONFLICT(root_id, rel_path) DO UPDATE SET\
-               abs_path=excluded.abs_path,\
-               is_dir=excluded.is_dir,\
-               is_symlink=excluded.is_symlink,\
-               size=excluded.size,\
-               mtime=excluded.mtime,\
-               ext=excluded.ext,\
-               status='active',\
-               last_seen_run=excluded.last_seen_run",
-            rusqlite::params![
-                root_id,
-                rel_path,
-                abs_path,
-                is_dir as i32,
-                is_symlink as i32,
-                size,
-                mtime,
-                ext,
-                run_id
-            ],
-        )?;
+        files.push(ScannedFile {
+            rel_path,
+            abs_path,
+            is_dir,
+            is_symlink,
+            size,
+            mtime,
+            ext,
+        });
+
         seen += 1;
         updated += 1;
+        if seen % 5000 == 0 {
+            progress.set_message(format!(
+                "Indexing root: {} (seen {}, updated {}, skipped {})",
+                root, seen, updated, skipped
+            ));
+        }
     }
 
-    let deleted = tx.execute(
-        "UPDATE files SET status='deleted' WHERE root_id = ?1 AND last_seen_run != ?2",
-        rusqlite::params![root_id, run_id],
-    )?;
+    if walk_errors > 0 {
+        if let Some(sample) = &first_walk_error {
+            progress.println(format!(
+                "Warning: {} walk errors under {} (e.g. {})",
+                walk_errors, root, sample
+            ));
+        } else {
+            progress.println(format!("Warning: {} walk errors under {}", walk_errors, root));
+        }
+    }
+    if permission_skips > 0 {
+        progress.println(format!(
+            "Warning: skipped {} entries due to permissions under {}",
+            permission_skips, root
+        ));
+    }
+
+    progress.set_message(format!(
+        "Scanned root: {} (seen {}, updated {}, skipped {})",
+        root, seen, updated, skipped
+    ));
+    progress.disable_steady_tick();
+
+    Ok(RootScanResult {
+        root_id,
+        root_path: root.to_string(),
+        files,
+        stats: IndexStats {
+            seen,
+            updated,
+            deleted: 0,
+            skipped,
+        },
+        duration: started.elapsed(),
+        root_missing: false,
+    })
+}
+
+fn merge_root(
+    store: &mut crate::store::StoreData,
+    result: &RootScanResult,
+    run_id: i64,
+    full: bool,
+) -> usize {
+    if result.root_missing {
+        return 0;
+    }
+
+    let root_id = result.root_id;
+
+    if full {
+        for file in store.files.iter_mut().filter(|f| f.root_id == root_id) {
+            file.status = "deleted".to_string();
+        }
+    }
+
+    let mut file_index = HashMap::new();
+    for (idx, file) in store.files.iter().enumerate() {
+        if file.root_id == root_id {
+            file_index.insert(file.rel_path.clone(), idx);
+        }
+    }
+
+    for scanned in &result.files {
+        if let Some(&idx) = file_index.get(&scanned.rel_path) {
+            let file = &mut store.files[idx];
+            file.abs_path = scanned.abs_path.clone();
+            file.is_dir = scanned.is_dir;
+            file.is_symlink = scanned.is_symlink;
+            file.size = scanned.size;
+            file.mtime = scanned.mtime;
+            file.ext = scanned.ext.clone();
+            file.status = "active".to_string();
+            file.last_seen_run = run_id;
+        } else {
+            let id = store.next_file_id();
+            store.files.push(FileEntry {
+                id,
+                root_id,
+                rel_path: scanned.rel_path.clone(),
+                abs_path: scanned.abs_path.clone(),
+                is_dir: scanned.is_dir,
+                is_symlink: scanned.is_symlink,
+                size: scanned.size,
+                mtime: scanned.mtime,
+                ext: scanned.ext.clone(),
+                status: "active".to_string(),
+                last_seen_run: run_id,
+            });
+        }
+    }
+
+    let mut deleted = 0;
+    for file in store.files.iter_mut().filter(|f| f.root_id == root_id) {
+        if file.last_seen_run != run_id && file.status != "deleted" {
+            file.status = "deleted".to_string();
+            deleted += 1;
+        }
+    }
 
     let now = Local::now().to_rfc3339();
-    tx.execute(
-        "UPDATE roots SET last_indexed_at = ?1 WHERE id = ?2",
-        rusqlite::params![now, root_id],
-    )?;
-
-    tx.commit()?;
-
-    if permission_skips > 0 {
-        tracing::warn!("skipped {} entries due to permissions", permission_skips);
+    if let Some(root_entry) = store.roots.iter_mut().find(|r| r.id == root_id) {
+        root_entry.last_indexed_at = Some(now);
     }
 
-    Ok(IndexStats {
-        seen,
-        updated,
-        deleted,
-        skipped,
-    })
+    deleted
 }
 
 fn build_matcher(cfg: &Config, root: &str) -> Result<IgnoreMatcher> {
@@ -293,4 +406,94 @@ fn is_hidden(path: &Path, root: &Path) -> bool {
         let part = c.as_os_str().to_string_lossy();
         part.starts_with('.') && part != "." && part != ".."
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, OutputMode};
+    use crate::store;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir()
+            .join(format!("catalog_test_{}_{}_{}", prefix, std::process::id(), nanos));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_file(path: &Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn indexer_respects_excludes_and_hidden_and_soft_delete() {
+        let dir = temp_dir("indexer");
+        let root = dir.join("root");
+        fs::create_dir_all(&root).unwrap();
+
+        let file1 = root.join("file1.txt");
+        let file2 = root.join("sub/file2.rs");
+        let ignored = root.join("node_modules/ignore.js");
+        let hidden = root.join(".hidden/secret.txt");
+
+        write_file(&file1, "a");
+        write_file(&file2, "b");
+        write_file(&ignored, "c");
+        write_file(&hidden, "d");
+
+        let root_canon = fs::canonicalize(&root).unwrap();
+        let file1_canon = root_canon.join("file1.txt");
+        let file2_canon = root_canon.join("sub/file2.rs");
+        let ignored_canon = root_canon.join("node_modules/ignore.js");
+        let hidden_canon = root_canon.join(".hidden/secret.txt");
+
+        let cfg = Config {
+            version: 1,
+            output: OutputMode::Plain,
+            include_hidden: false,
+            one_filesystem: true,
+            roots: vec![path_to_string(&root_canon)],
+            excludes: vec!["**/node_modules/**".to_string()],
+        };
+
+        let store_path = dir.join("catalog.json");
+        let mut store = store::Store::load(&store_path).unwrap();
+
+        let stats = run(&mut store, &cfg, false, false).unwrap();
+        assert!(stats.seen >= 2);
+
+        let paths = store
+            .data
+            .files
+            .iter()
+            .filter(|f| f.status == "active" && !f.is_dir)
+            .map(|f| f.abs_path.clone())
+            .collect::<Vec<_>>();
+
+        assert!(paths.contains(&path_to_string(&file1_canon)));
+        assert!(paths.contains(&path_to_string(&file2_canon)));
+        assert!(!paths.contains(&path_to_string(&ignored_canon)));
+        assert!(!paths.contains(&path_to_string(&hidden_canon)));
+
+        fs::remove_file(&file1).unwrap();
+        let _ = run(&mut store, &cfg, false, false).unwrap();
+
+        let status = store
+            .data
+            .files
+            .iter()
+            .find(|f| f.abs_path == path_to_string(&file1_canon))
+            .map(|f| f.status.clone())
+            .unwrap();
+        assert_eq!(status, "deleted");
+    }
 }

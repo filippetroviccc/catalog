@@ -1,88 +1,86 @@
+use crate::store::StoreData;
 use crate::util::{normalize_path_allow_missing, path_to_string};
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension};
+use std::collections::HashMap;
 
-pub fn add_tag(conn: &Connection, target: &str, tag: &str) -> Result<()> {
-    let file_id = resolve_file_id(conn, target)?;
+pub fn add_tag(store: &mut StoreData, target: &str, tag: &str) -> Result<()> {
+    let file_id = resolve_file_id(store, target)?;
     let tag = tag.trim().to_lowercase();
     if tag.is_empty() {
         anyhow::bail!("tag cannot be empty");
     }
-    conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", rusqlite::params![tag])?;
-    let tag_id: i64 = conn.query_row(
-        "SELECT id FROM tags WHERE name = ?1",
-        rusqlite::params![tag],
-        |row| row.get(0),
-    )?;
-    conn.execute(
-        "INSERT OR IGNORE INTO file_tags (file_id, tag_id) VALUES (?1, ?2)",
-        rusqlite::params![file_id, tag_id],
-    )?;
+    let tag_id = match store.tags.iter().find(|t| t.name == tag) {
+        Some(t) => t.id,
+        None => {
+            let id = store.next_tag_id();
+            store.tags.push(crate::store::TagEntry { id, name: tag });
+            id
+        }
+    };
+    if !store
+        .file_tags
+        .iter()
+        .any(|ft| ft.file_id == file_id && ft.tag_id == tag_id)
+    {
+        store
+            .file_tags
+            .push(crate::store::FileTagEntry { file_id, tag_id });
+    }
     Ok(())
 }
 
-pub fn remove_tag(conn: &Connection, target: &str, tag: &str) -> Result<()> {
-    let file_id = resolve_file_id(conn, target)?;
+pub fn remove_tag(store: &mut StoreData, target: &str, tag: &str) -> Result<()> {
+    let file_id = resolve_file_id(store, target)?;
     let tag = tag.trim().to_lowercase();
     if tag.is_empty() {
         anyhow::bail!("tag cannot be empty");
     }
-    if let Ok(tag_id) = conn.query_row(
-        "SELECT id FROM tags WHERE name = ?1",
-        rusqlite::params![tag],
-        |row| row.get(0),
-    ) {
-        conn.execute(
-            "DELETE FROM file_tags WHERE file_id = ?1 AND tag_id = ?2",
-            rusqlite::params![file_id, tag_id],
-        )?;
-        conn.execute(
-            "DELETE FROM tags WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM file_tags WHERE tag_id = ?1)",
-            rusqlite::params![tag_id],
-        )?;
+    let tag_id = match store.tags.iter().find(|t| t.name == tag) {
+        Some(t) => t.id,
+        None => return Ok(()),
+    };
+
+    store
+        .file_tags
+        .retain(|ft| !(ft.file_id == file_id && ft.tag_id == tag_id));
+
+    let still_used = store.file_tags.iter().any(|ft| ft.tag_id == tag_id);
+    if !still_used {
+        store.tags.retain(|t| t.id != tag_id);
     }
     Ok(())
 }
 
-pub fn list_tags(conn: &Connection) -> Result<()> {
-    let mut stmt = conn.prepare(
-        "SELECT t.name, COUNT(ft.file_id) \
-         FROM tags t \
-         LEFT JOIN file_tags ft ON t.id = ft.tag_id \
-         GROUP BY t.id \
-         ORDER BY t.name",
-    )?;
-    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?;
-    for row in rows {
-        let (name, count) = row?;
+pub fn list_tags(store: &StoreData) -> Result<()> {
+    let mut counts: HashMap<i64, i64> = HashMap::new();
+    for ft in &store.file_tags {
+        *counts.entry(ft.tag_id).or_insert(0) += 1;
+    }
+    let mut entries = store
+        .tags
+        .iter()
+        .map(|t| (t.name.clone(), *counts.get(&t.id).unwrap_or(&0)))
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, count) in entries {
         println!("{}  {}", name, count);
     }
     Ok(())
 }
 
-fn resolve_file_id(conn: &Connection, target: &str) -> Result<i64> {
+fn resolve_file_id(store: &StoreData, target: &str) -> Result<i64> {
     if let Ok(id) = target.parse::<i64>() {
-        let exists: Option<i64> = conn
-            .query_row(
-                "SELECT id FROM files WHERE id = ?1",
-                rusqlite::params![id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if exists.is_some() {
+        if store.files.iter().any(|f| f.id == id) {
             return Ok(id);
         }
     }
 
     let normalized = normalize_path_allow_missing(target)?;
     let path = path_to_string(&normalized);
-    let file_id: Option<i64> = conn
-        .query_row(
-            "SELECT id FROM files WHERE abs_path = ?1",
-            rusqlite::params![path],
-            |row| row.get(0),
-        )
-        .optional()
-        .with_context(|| "failed to resolve file id")?;
+    let file_id = store
+        .files
+        .iter()
+        .find(|f| f.abs_path == path)
+        .map(|f| f.id);
     file_id.context("file not found")
 }

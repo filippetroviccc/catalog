@@ -5,14 +5,14 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputMode {
     Plain,
     Json,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub version: u32,
     pub output: OutputMode,
@@ -37,11 +37,11 @@ impl Default for Config {
 
 pub struct Paths {
     pub config_path: PathBuf,
-    pub db_path: PathBuf,
+    pub store_path: PathBuf,
 }
 
 impl Paths {
-    pub fn resolve(config_override: Option<&str>, db_override: Option<&str>) -> Result<Self> {
+    pub fn resolve(config_override: Option<&str>, store_override: Option<&str>) -> Result<Self> {
         let config_path = match config_override {
             Some(p) => normalize_path_allow_missing(p)?,
             None => match std::env::var("CATALOG_CONFIG").ok() {
@@ -49,20 +49,26 @@ impl Paths {
                 None => default_config_path()?,
             },
         };
-        let db_path = match db_override {
+        let store_path = match store_override {
             Some(p) => normalize_path_allow_missing(p)?,
-            None => match std::env::var("CATALOG_DB").ok() {
+            None => match std::env::var("CATALOG_STORE").ok() {
                 Some(p) => normalize_path_allow_missing(&p)?,
-                None => default_db_path()?,
+                None => match std::env::var("CATALOG_DB").ok() {
+                    Some(p) => normalize_path_allow_missing(&p)?,
+                    None => default_store_path()?,
+                },
             },
         };
-        Ok(Self { config_path, db_path })
+        Ok(Self {
+            config_path,
+            store_path,
+        })
     }
 }
 
 pub fn init(paths: &Paths, preset: Option<Preset>) -> Result<()> {
     ensure_parent_dir(&paths.config_path)?;
-    ensure_parent_dir(&paths.db_path)?;
+    ensure_parent_dir(&paths.store_path)?;
 
     let mut cfg = if paths.config_path.exists() {
         load(&paths.config_path)?
@@ -125,9 +131,9 @@ pub fn default_config_path() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join("Library/Application Support/catalog/config.toml"))
 }
 
-pub fn default_db_path() -> Result<PathBuf> {
+pub fn default_store_path() -> Result<PathBuf> {
     let home = std::env::var_os("HOME").context("HOME not set")?;
-    Ok(PathBuf::from(home).join("Library/Application Support/catalog/catalog.db"))
+    Ok(PathBuf::from(home).join("Library/Application Support/catalog/catalog.json"))
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<()> {
@@ -199,4 +205,40 @@ fn default_excludes() -> Vec<String> {
     .into_iter()
     .map(String::from)
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir()
+            .join(format!("catalog_test_{}_{}_{}", prefix, std::process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn config_round_trip() {
+        let dir = temp_dir("config");
+        let path = dir.join("config.toml");
+
+        let cfg = Config {
+            version: 1,
+            output: OutputMode::Json,
+            include_hidden: true,
+            one_filesystem: false,
+            roots: vec!["/tmp".to_string()],
+            excludes: vec!["**/node_modules/**".to_string()],
+        };
+
+        save(&path, &cfg).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(cfg, loaded);
+    }
 }
