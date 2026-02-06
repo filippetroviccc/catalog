@@ -6,8 +6,8 @@ pub struct Cli {
     /// Override config path
     #[arg(long)]
     pub config: Option<String>,
-    /// Override store path (JSON)
-    #[arg(long, alias = "db")]
+    /// Override store path (binary)
+    #[arg(long)]
     pub store: Option<String>,
     /// Enable debug logging
     #[arg(long, global = true)]
@@ -95,6 +95,26 @@ pub enum Commands {
     },
     /// Remove all stored index state
     Prune,
+    /// Analyze disk usage
+    Analyze {
+        /// Path to analyze (defaults to configured roots)
+        path: Option<String>,
+        /// Top N folders to show
+        #[arg(long)]
+        top: Option<usize>,
+        /// Top N files to show
+        #[arg(long)]
+        files: Option<usize>,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+        /// Raw text report output
+        #[arg(long, conflicts_with_all = ["json", "tui"])]
+        raw: bool,
+        /// Interactive TUI browser (default)
+        #[arg(long, conflicts_with_all = ["json", "raw"])]
+        tui: bool,
+    },
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -103,6 +123,8 @@ pub enum Preset {
     MacosUserAdditions,
     #[value(name = "macos-deep")]
     MacosDeep,
+    #[value(name = "macos-full")]
+    MacosFull,
 }
 
 impl Preset {
@@ -110,6 +132,7 @@ impl Preset {
         match self {
             Preset::MacosUserAdditions => "macos-user-additions".to_string(),
             Preset::MacosDeep => "macos-deep".to_string(),
+            Preset::MacosFull => "macos-full".to_string(),
         }
     }
 }

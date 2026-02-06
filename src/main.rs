@@ -1,14 +1,16 @@
-mod cli;
-mod config;
-mod indexer;
-mod output;
-mod roots;
-mod search;
-mod store;
-mod util;
-
 use anyhow::{Context, Result};
+use catalog::analyze;
+use catalog::analyze_tui;
+use catalog::cli;
+use catalog::config;
+use catalog::indexer;
+use catalog::output;
+use catalog::roots;
+use catalog::search;
+use catalog::store;
+use catalog::util;
 use clap::Parser;
+use indicatif::{ProgressBar, ProgressStyle};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
@@ -164,6 +166,110 @@ fn main() -> Result<()> {
                 println!("No store found to remove.");
             } else {
                 println!("Pruned {} store file(s).", removed);
+            }
+        }
+        cli::Commands::Analyze { path, top, files, json, raw, tui } => {
+            let cfg = config::load(&paths.config_path)
+                .with_context(|| "config not found; run `catalog init`")?;
+            let mut store = store::Store::load(&paths.store_path)?;
+            let filter = match path {
+                Some(p) => Some(util::normalize_path_allow_missing(&p)?),
+                None => None,
+            };
+            let stale = store::index_is_stale(
+                &store.data,
+                filter.as_deref(),
+                chrono::Duration::days(1),
+            );
+            let use_tui = tui || (!json && !raw);
+            if use_tui {
+                let browse_index = if stale {
+                    let roots = store
+                        .data
+                        .roots
+                        .iter()
+                        .map(|root| std::path::PathBuf::from(&root.path))
+                        .collect::<Vec<_>>();
+                    let mut builder = analyze::BrowseIndexBuilder::new(filter.clone(), roots);
+                    let _stats =
+                        indexer::run_with_observer(&mut store, &cfg, false, false, &mut builder)?;
+                    store.save()?;
+                    builder.finalize()
+                } else {
+                    let pb = ProgressBar::new_spinner();
+                    let style = ProgressStyle::with_template("{spinner:.green} {msg}")
+                        .unwrap_or_else(|_| ProgressStyle::default_spinner());
+                    pb.set_style(style);
+                    pb.set_message("Analyzing existing index...");
+                    pb.enable_steady_tick(std::time::Duration::from_millis(120));
+                    let mut last_k = 0usize;
+                    let mut progress = |processed: usize| {
+                        let k = processed / 1000;
+                        if k != last_k {
+                            last_k = k;
+                            pb.set_message(format!("Analyzing {}k files...", k));
+                        }
+                    };
+                    let report = analyze::browse_index_from_store_with_progress(
+                        &store,
+                        filter.clone(),
+                        Some(&mut progress),
+                    );
+                    pb.finish_and_clear();
+                    report
+                };
+
+                let start_path = filter.and_then(|p| {
+                    if browse_index.has_dir(&p) {
+                        Some(p)
+                    } else if browse_index.has_file(&p) {
+                        p.parent().map(|parent| parent.to_path_buf())
+                    } else {
+                        None
+                    }
+                });
+                analyze_tui::run_browse_tui(&browse_index, start_path)?;
+            } else {
+                let report = if stale {
+                    let mut analyzer =
+                        analyze::Analyzer::new(filter, top.unwrap_or(20), files.unwrap_or(20));
+                    let stats =
+                        indexer::run_with_observer(&mut store, &cfg, false, false, &mut analyzer)?;
+                    store.save()?;
+                    let report = analyzer.finalize();
+                    if !json {
+                        println!(
+                            "\nIndexed {} files ({} updated, {} deleted, {} skipped).",
+                            stats.seen, stats.updated, stats.deleted, stats.skipped
+                        );
+                    }
+                    report
+                } else {
+                    let pb = ProgressBar::new_spinner();
+                    let style = ProgressStyle::with_template("{spinner:.green} {msg}")
+                        .unwrap_or_else(|_| ProgressStyle::default_spinner());
+                    pb.set_style(style);
+                    pb.set_message("Analyzing existing index...");
+                    pb.enable_steady_tick(std::time::Duration::from_millis(120));
+                    let mut last_k = 0usize;
+                    let mut progress = |processed: usize| {
+                        let k = processed / 1000;
+                        if k != last_k {
+                            last_k = k;
+                            pb.set_message(format!("Analyzing {}k files...", k));
+                        }
+                    };
+                    let report = analyze::analyze_store_with_progress(
+                        &store,
+                        filter,
+                        top.unwrap_or(20),
+                        files.unwrap_or(20),
+                        Some(&mut progress),
+                    );
+                    pb.finish_and_clear();
+                    report
+                };
+                analyze::print_report(&report, json)?;
             }
         }
     }

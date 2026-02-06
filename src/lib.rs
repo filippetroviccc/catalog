@@ -1,0 +1,10 @@
+pub mod analyze;
+pub mod analyze_tui;
+pub mod cli;
+pub mod config;
+pub mod indexer;
+pub mod output;
+pub mod roots;
+pub mod search;
+pub mod store;
+pub mod util;
