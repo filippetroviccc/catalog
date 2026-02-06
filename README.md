@@ -9,17 +9,16 @@ Fast local file system indexing and analysis for macOS.
 
 All metadata is stored locally in a compact snapshot (no database required). Privacy-first: file contents are never read.
 
-## Contents
-- [Install](#install)
-- [Quick Start](#quick-start)
-- [Core Commands](#core-commands)
-- [Configuration](#configuration)
-- [Advanced](#advanced)
-- [Features](#features)
-- [How It Works](#how-it-works)
-- [Presets](#presets)
-
 ## Install
+
+### Homebrew (macOS Apple Silicon)
+
+```sh
+brew tap filippetroviccc/catalog
+brew install catalog
+```
+
+### From Source
 
 Build and install the CLI so you can run `catalog` directly:
 
