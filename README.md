@@ -1,36 +1,23 @@
-# catalog
+# Catalog
 
-**Fast local file system indexing and analysis for macOS.**
+Fast local file system indexing and analysis for macOS.
 
 `catalog` helps you:
-- **Analyze disk usage** — Find what's consuming the most storage space
-- **Search files instantly** — Query metadata without reading file contents
-- **Track changes** — Incremental indexing with soft deletes keeps your index fresh
+- **Analyze disk usage** to spot space hogs quickly
+- **Search files instantly** via metadata (no content reads)
+- **Track changes** with incremental indexing and soft deletes
 
 All metadata is stored locally in a compact snapshot (no database required). Privacy-first: file contents are never read.
 
-## Features
-
-### Fast File Search
-Search across all indexed files with powerful filters:
-```sh
-catalog search report --ext pdf,docx --after 2024-01-01
-catalog search build --root ~/Projects --min-size 1000000
-```
-
-### Storage Analysis
-Discover what's consuming disk space with interactive or text reports:
-```sh
-catalog analyze ~/Projects          # Auto-refreshes if >1 day old
-catalog analyze --top 20 --files 20 # Show top directories and files
-```
-
-### Incremental Indexing
-Only scans what's changed since the last run:
-```sh
-catalog index              # Fast incremental update
-catalog index --full       # Complete rescan
-```
+## Contents
+- [Install](#install)
+- [Quick Start](#quick-start)
+- [Core Commands](#core-commands)
+- [Configuration](#configuration)
+- [Advanced](#advanced)
+- [Features](#features)
+- [How It Works](#how-it-works)
+- [Presets](#presets)
 
 ## Install
 
@@ -170,6 +157,30 @@ catalog export --output /tmp/catalog.json
 # Hard reset (remove all index data, keep config)
 catalog prune
 ```
+
+## Features
+
+### Fast Search
+Search across all indexed files with powerful filters:
+```sh
+catalog search report --ext pdf,docx --after 2024-01-01
+catalog search build --root ~/Projects --min-size 1000000
+```
+
+### Storage Analysis
+Discover what's consuming disk space with interactive or text reports:
+```sh
+catalog analyze ~/Projects          # Auto-refreshes if >1 day old
+catalog analyze --top 20 --files 20 # Show top directories and files
+```
+
+### Incremental Indexing
+Only scans what's changed since the last run:
+```sh
+catalog index              # Fast incremental update
+catalog index --full       # Complete rescan
+```
+
 
 ### Paths and Environment Variables
 
