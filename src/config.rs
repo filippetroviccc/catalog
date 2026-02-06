@@ -53,10 +53,7 @@ impl Paths {
             Some(p) => normalize_path_allow_missing(p)?,
             None => match std::env::var("CATALOG_STORE").ok() {
                 Some(p) => normalize_path_allow_missing(&p)?,
-                None => match std::env::var("CATALOG_DB").ok() {
-                    Some(p) => normalize_path_allow_missing(&p)?,
-                    None => default_store_path()?,
-                },
+                None => default_store_path()?,
             },
         };
         Ok(Self {
@@ -77,7 +74,7 @@ pub fn init(paths: &Paths, preset: Option<Preset>) -> Result<()> {
     };
 
     let default_preset = if preset.is_none() && !paths.config_path.exists() {
-        Some(Preset::MacosUserAdditions)
+        Some(Preset::MacosFull)
     } else {
         None
     };
@@ -112,6 +109,7 @@ pub fn apply_preset(cfg: &mut Config, preset: Preset) -> Result<()> {
             r.extend(macos_deep_roots());
             r
         }
+        Preset::MacosFull => macos_full_roots(),
     };
     let mut normalized = Vec::new();
     for root in roots {
@@ -122,7 +120,16 @@ pub fn apply_preset(cfg: &mut Config, preset: Preset) -> Result<()> {
         }
     }
     cfg.roots = normalized;
-    cfg.excludes = default_excludes();
+    match preset {
+        Preset::MacosFull => {
+            cfg.excludes = Vec::new();
+            cfg.include_hidden = true;
+            cfg.one_filesystem = true;
+        }
+        _ => {
+            cfg.excludes = default_excludes();
+        }
+    }
     Ok(())
 }
 
@@ -188,6 +195,10 @@ fn macos_deep_roots() -> Vec<String> {
     .into_iter()
     .map(String::from)
     .collect()
+}
+
+fn macos_full_roots() -> Vec<String> {
+    vec!["/".to_string()]
 }
 
 fn default_excludes() -> Vec<String> {

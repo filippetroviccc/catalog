@@ -17,7 +17,7 @@ This document defines CLI commands, flags, output formats, and exit codes.
 
 ## Commands
 
-### `catalog init [--preset macos-user-additions|macos-deep]`
+### `catalog init [--preset macos-user-additions|macos-deep|macos-full]`
 
 - Creates config and store if missing.
 - Writes preset roots to config when `--preset` is provided.
@@ -75,6 +75,15 @@ catalog search launch --after 2024-01-01 --root ~/Library/LaunchAgents
 ### `catalog prune`
 
 - Removes all stored index data while keeping config.
+
+### `catalog analyze [path] [--top N] [--files N] [--json] [--raw] [--tui]`
+
+- Reports what occupies the most space under a path (or entire disk).
+- Reuses the index scan when possible to avoid duplicate filesystem walks.
+- Defaults: `top=20`, `files=20`.
+- Auto-refreshes if the stored index is older than 1 day.
+- Defaults to an interactive browser (arrow keys or mouse to navigate, Enter to drill, Backspace to go back).
+- `--raw` prints the plain text report instead of the TUI.
 
 ### `catalog watch [--interval N] [--full] [--one-filesystem]`
 

@@ -12,6 +12,7 @@ The MVP is complete when all items below are met.
 
 - `catalog init` creates config and store in default locations.
 - `catalog init --preset macos-user-additions` expands preset roots and writes them to config.
+- `catalog init` defaults to a full-system preset (`macos-full`).
 - `catalog roots` prints configured roots, excludes, and last index time.
 - `catalog add <path>...` adds roots to config and persists.
 - `catalog rm <path>...` removes roots from config and persists.
@@ -19,6 +20,7 @@ The MVP is complete when all items below are met.
 - `catalog index --full` forces a full rescan.
 - `catalog search <query>` returns case-insensitive substring matches on filename and path.
 - `catalog recent` returns the most recently modified files.
+- `catalog analyze` reports largest folders/files.
 
 ### Functional Behavior
 

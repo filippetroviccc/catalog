@@ -14,6 +14,7 @@ Core components and responsibilities:
 - Indexer: walks files, computes metadata, performs incremental updates, soft deletes.
 - Store layer: JSON load/save, atomic writes, ID counters, and in-memory views.
 - Search engine: in-memory substring search + filters (ext, size, time, root).
+- Storage analysis: reuse index scan results to avoid duplicate filesystem walks.
 - Output: plain or JSON, stable schema for scripting.
 - Logging: warnings, permission errors, summary per index run.
 
@@ -26,6 +27,7 @@ Core components and responsibilities:
 1. CLI parses command -> loads config + store -> invokes component.
 2. Index run: compile ignore rules -> walk roots -> upsert file rows -> mark missing as deleted -> update root timestamps.
 3. Search: parse query + filters -> in-memory filter -> format output.
+4. Analyze: reuse index scan results -> aggregate usage -> report top folders/files + hidden space.
 
 ### Config
 
@@ -33,7 +35,7 @@ Suggested defaults (explicit, macOS-first):
 
 - Config path: `~/Library/Application Support/catalog/config.toml`
 - Store path: `~/Library/Application Support/catalog/catalog.bin`
-- Env overrides: `CATALOG_CONFIG`, `CATALOG_STORE` (legacy `CATALOG_DB`)
+- Env overrides: `CATALOG_CONFIG`, `CATALOG_STORE`
 - Config schema (TOML):
   - `roots = ["..."]`
   - `excludes = ["**/.git/**", "**/node_modules/**", ...]`
@@ -49,6 +51,7 @@ On `init --preset`:
 - For `~/Developer` and `~/Projects`, include the first existing.
 - Expand `~` to home.
 - Ignore missing roots; only include existing paths in config.
+- Default preset is `macos-full` when no preset is provided.
 
 ### Store Schema
 
@@ -79,6 +82,13 @@ Per root:
 5. After walk, mark missing:
    - For files in the root with `last_seen_run != run_id`, set `status = deleted`.
 6. Update `roots.last_indexed_at`.
+
+### Disk Usage Analysis
+
+- Prefer reusing the `index` scan results.
+- Aggregate by directory and file sizes.
+- Report top usage and hidden/unaccounted space.
+- Auto-refresh if the stored index is older than 1 day.
 
 ### Deletions
 
@@ -140,6 +150,8 @@ Default: do not follow. Index symlink itself with `is_symlink = true`. Never tra
   - Add/remove/list roots and validation logic.
 - `src/indexer.rs`
   - Directory walk and store updates.
+- `src/analyze.rs`
+  - Disk usage analysis and reporting.
 - `src/ignore.rs`
   - Exclude matcher using `ignore` crate.
 - `src/store.rs`
