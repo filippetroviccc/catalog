@@ -22,10 +22,16 @@ cargo build
 # Build optimized release binary
 cargo build --release
 
+# Install locally so you can run `catalog` directly
+cargo install --path .
+
 # Run without installing
 cargo run -- <command>
 
-# Run with debug logging
+# Run with debug logging (via --debug flag)
+cargo run -- --debug <command>
+
+# Or use RUST_LOG for fine-grained control
 RUST_LOG=debug cargo run -- <command>
 ```
 
@@ -44,6 +50,7 @@ cargo test -- --nocapture
 cargo test <module_name>::
 ```
 
+
 ### Development Workflow
 ```bash
 # Initialize catalog (creates config + store)
@@ -52,15 +59,62 @@ cargo run -- init --preset macos-user-additions
 # Index configured roots
 cargo run -- index
 
+# Full rescan (re-index everything)
+cargo run -- index --full
+
 # Search for files
 cargo run -- search <query>
+
+# Search with filters
+cargo run -- search font --ext ttf,otf
+cargo run -- search log --min-size 1000 --max-size 100000
+cargo run -- search build --root ~/Projects --after 2024-01-01
+
+# View recent files
+cargo run -- recent --days 3 --limit 20
+
+# Analyze disk usage (auto-refreshes if index is >1 day old)
+cargo run -- analyze ~/Projects --top 20 --files 20
+# Interactive browse (TUI, default)
+cargo run -- analyze
+# Raw text report
+cargo run -- analyze --raw
+
+# Export store as JSON
+cargo run -- export --output /tmp/catalog.json
 
 # Add custom root
 cargo run -- add ~/path/to/dir
 
 # View configured roots
 cargo run -- roots
+
+# Prune (hard reset - removes all index data, keeps config)
+cargo run -- prune
 ```
+
+## CLI Commands Reference
+
+### Core Commands
+- `init [--preset <name>]`: Creates config and store. Presets: `macos-user-additions`, `macos-deep`, `macos-full`
+- `index [--full] [--one-filesystem]`: Incremental index (or full rescan with `--full`)
+- `search <query> [--ext] [--after] [--before] [--min-size] [--max-size] [--root] [--long] [--json]`: Search with filters
+- `recent [--days N] [--limit N] [--long] [--json]`: List recently modified files (defaults: 7 days, 50 limit)
+- `analyze [path] [--top N] [--files N] [--json]`: Disk usage analysis; auto-refreshes if index >1 day old
+
+### Configuration Commands
+- `roots`: View configured roots and settings
+- `add <path>...`: Add one or more roots to config
+- `rm <path>...`: Remove roots and purge their store entries
+
+### Maintenance Commands
+- `export [--output <path>]`: Export store as JSON (to stdout or file)
+- `prune`: Hard reset - removes all index data while keeping config
+
+### Global Flags
+- `--debug`: Enable debug logging (alternative to `RUST_LOG=debug`)
+- `--json`: Output in JSON format (for `search`, `recent`, `analyze`)
+- `--long`: Show additional metadata (for `search`, `recent`)
 
 ## Architecture
 
@@ -74,11 +128,13 @@ cargo run -- roots
 - **`roots.rs`**: Root path add/remove/sync logic with config and store.
 - **`output.rs`**: Plain text and JSON output formatting for search results.
 - **`util.rs`**: Shared utilities.
+- **`analyze.rs`**: Disk usage analysis; reuses index scan results to avoid duplicate filesystem walks.
 
 ### Data Flow
 
 1. **Index**: Load config → Load binary store → Walk roots with ignore rules → Upsert files (keyed by `root_id + rel_path`) → Mark missing files as deleted → Update root timestamps → Save store
 2. **Search**: Parse query + filters → In-memory filter over store → Format output (plain or JSON)
+3. **Analyze**: Reuse index scan results (or stored index) → Aggregate by directory/file → Report top usage + hidden space summary
 
 ### Store Schema (JSON)
 
@@ -124,7 +180,7 @@ Files are identified by `(root_id, rel_path)`. Each index run:
 ### Config Defaults
 - Config path: `~/Library/Application Support/catalog/config.toml`
 - Store path: `~/Library/Application Support/catalog/catalog.bin`
-- Env overrides: `CATALOG_CONFIG`, `CATALOG_STORE` (and legacy `CATALOG_DB`)
+- Env overrides: `CATALOG_CONFIG`, `CATALOG_STORE`
 
 ### Default Excludes
 Strong noise filters prevent indexing:
