@@ -316,6 +316,16 @@ pub fn analyze_store_with_progress(
     top_files: usize,
     mut progress: Option<&mut dyn FnMut(usize)>,
 ) -> AnalysisResult {
+    if let Some(dir_totals) = load_dir_size_cache(store) {
+        return analyze_store_with_cache(
+            store,
+            filter,
+            top_dirs,
+            top_files,
+            dir_totals,
+            progress,
+        );
+    }
     let mut analyzer = Analyzer::new(filter, top_dirs, top_files);
     let mut roots = HashMap::new();
     for root in &store.data.roots {
@@ -354,6 +364,9 @@ pub fn browse_index_from_store_with_progress(
     filter: Option<PathBuf>,
     mut progress: Option<&mut dyn FnMut(usize)>,
 ) -> BrowseIndex {
+    if let Some(dir_totals) = load_dir_size_cache(store) {
+        return browse_index_from_cache(store, filter, dir_totals, progress);
+    }
     let roots = store
         .data
         .roots
@@ -391,6 +404,225 @@ pub fn browse_index_from_store_with_progress(
         cb(processed);
     }
     builder.finalize()
+}
+
+fn load_dir_size_cache(store: &crate::store::Store) -> Option<HashMap<PathBuf, u64>> {
+    if store.data.dir_sizes_run_id != store.data.last_run_id {
+        return None;
+    }
+    if store.data.dir_sizes.is_empty() {
+        return None;
+    }
+    let mut map = HashMap::new();
+    for entry in &store.data.dir_sizes {
+        map.insert(PathBuf::from(&entry.path), entry.size);
+    }
+    Some(map)
+}
+
+fn analyze_store_with_cache(
+    store: &crate::store::Store,
+    filter: Option<PathBuf>,
+    top_dirs: usize,
+    top_files: usize,
+    dir_totals: HashMap<PathBuf, u64>,
+    mut progress: Option<&mut dyn FnMut(usize)>,
+) -> AnalysisResult {
+    let mut roots = HashMap::new();
+    for root in &store.data.roots {
+        roots.insert(root.id, PathBuf::from(&root.path));
+    }
+
+    let mut total_scanned = 0u64;
+    let mut root_totals: HashMap<PathBuf, u64> = HashMap::new();
+    let mut top_files_acc = TopN::new(top_files);
+    let mut processed = 0usize;
+
+    for file in &store.data.files {
+        if file.status != "active" || file.is_dir {
+            continue;
+        }
+        let root_path = match roots.get(&file.root_id) {
+            Some(p) => p,
+            None => continue,
+        };
+        let size = file.size.max(0) as u64;
+        if size == 0 {
+            continue;
+        }
+        let file_path = Path::new(&file.abs_path);
+        if let Some(filter) = &filter {
+            if !file_path.starts_with(filter) {
+                continue;
+            }
+        }
+        total_scanned += size;
+        *root_totals.entry(root_path.to_path_buf()).or_insert(0) += size;
+        top_files_acc.push(file.abs_path.clone(), size);
+
+        processed += 1;
+        if processed % 50_000 == 0 {
+            if let Some(cb) = progress.as_deref_mut() {
+                cb(processed);
+            }
+        }
+    }
+    if let Some(cb) = progress.as_deref_mut() {
+        cb(processed);
+    }
+
+    let mut dir_top = TopN::new(top_dirs);
+    for (path, size) in dir_totals {
+        if size == 0 {
+            continue;
+        }
+        if let Some(filter) = &filter {
+            if !path.starts_with(filter) {
+                continue;
+            }
+        }
+        dir_top.push(path.to_string_lossy().to_string(), size);
+    }
+
+    let mut root_entries = root_totals
+        .into_iter()
+        .map(|(path, size)| UsageEntry {
+            path: path.to_string_lossy().to_string(),
+            size,
+        })
+        .collect::<Vec<_>>();
+    root_entries.sort_by(|a, b| b.size.cmp(&a.size));
+
+    AnalysisResult {
+        total_scanned,
+        roots: root_entries,
+        top_dirs: dir_top.into_sorted(),
+        top_files: top_files_acc.into_sorted(),
+    }
+}
+
+fn browse_index_from_cache(
+    store: &crate::store::Store,
+    filter: Option<PathBuf>,
+    mut dir_totals: HashMap<PathBuf, u64>,
+    mut progress: Option<&mut dyn FnMut(usize)>,
+) -> BrowseIndex {
+    if let Some(filter_path) = &filter {
+        dir_totals = dir_totals
+            .into_iter()
+            .filter(|(path, _)| path.starts_with(filter_path))
+            .collect::<HashMap<_, _>>();
+        dir_totals.entry(filter_path.clone()).or_insert(0);
+    }
+
+    let mut roots_by_id = HashMap::new();
+    for root in &store.data.roots {
+        roots_by_id.insert(root.id, PathBuf::from(&root.path));
+    }
+
+    let mut total_scanned = 0u64;
+    let mut root_totals: HashMap<PathBuf, u64> = HashMap::new();
+    let mut file_sizes: HashMap<PathBuf, u64> = HashMap::new();
+    let mut processed = 0usize;
+
+    for file in &store.data.files {
+        if file.status != "active" || file.is_dir {
+            continue;
+        }
+        let root_path = match roots_by_id.get(&file.root_id) {
+            Some(p) => p,
+            None => continue,
+        };
+        let size = file.size.max(0) as u64;
+        if size == 0 {
+            continue;
+        }
+        let file_path = Path::new(&file.abs_path);
+        if let Some(filter) = &filter {
+            if !file_path.starts_with(filter) {
+                continue;
+            }
+        }
+
+        total_scanned += size;
+        *root_totals.entry(root_path.to_path_buf()).or_insert(0) += size;
+        file_sizes.insert(PathBuf::from(&file.abs_path), size);
+
+        processed += 1;
+        if processed % 50_000 == 0 {
+            if let Some(cb) = progress.as_deref_mut() {
+                cb(processed);
+            }
+        }
+    }
+    if let Some(cb) = progress.as_deref_mut() {
+        cb(processed);
+    }
+
+    for root in roots_by_id.values() {
+        dir_totals.entry(root.clone()).or_insert(0);
+    }
+
+    let mut root_entries = root_totals
+        .into_iter()
+        .map(|(path, size)| BrowseEntry {
+            path,
+            size,
+            is_dir: true,
+        })
+        .collect::<Vec<_>>();
+    root_entries.sort_by(|a, b| {
+        b.size
+            .cmp(&a.size)
+            .then_with(|| a.path.to_string_lossy().cmp(&b.path.to_string_lossy()))
+    });
+
+    let dir_set: HashSet<PathBuf> = dir_totals.keys().cloned().collect();
+    let mut children: HashMap<PathBuf, Vec<BrowseEntry>> = HashMap::new();
+    for dir in &dir_set {
+        if let Some(parent) = dir.parent() {
+            if dir_set.contains(parent) {
+                let size = dir_totals.get(dir).copied().unwrap_or(0);
+                children
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .push(BrowseEntry {
+                        path: dir.clone(),
+                        size,
+                        is_dir: true,
+                    });
+            }
+        }
+    }
+    for (path, size) in &file_sizes {
+        if let Some(parent) = path.parent() {
+            if dir_set.contains(parent) {
+                children
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .push(BrowseEntry {
+                        path: path.clone(),
+                        size: *size,
+                        is_dir: false,
+                    });
+            }
+        }
+    }
+    for entries in children.values_mut() {
+        entries.sort_by(|a, b| {
+            b.size
+                .cmp(&a.size)
+                .then_with(|| a.path.to_string_lossy().cmp(&b.path.to_string_lossy()))
+        });
+    }
+
+    BrowseIndex {
+        total_scanned,
+        root_entries,
+        dir_totals,
+        file_sizes,
+        children,
+    }
 }
 
 pub fn print_report(result: &AnalysisResult, json: bool) -> Result<()> {

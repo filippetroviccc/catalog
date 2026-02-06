@@ -12,13 +12,13 @@ This document defines the binary store format and versioning strategy. The on-di
 
 ---
 
-## Base Schema (Version 1)
+## Base Schema (Version 2)
 
 Top-level fields:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "last_run_id": 0,
   "next_root_id": 1,
   "next_file_id": 1,
@@ -26,7 +26,9 @@ Top-level fields:
   "roots": [],
   "files": [],
   "tags": [],
-  "file_tags": []
+  "file_tags": [],
+  "dir_sizes_run_id": 0,
+  "dir_sizes": []
 }
 ```
 
@@ -61,9 +63,22 @@ Top-level fields:
 }
 ```
 
-### `tags` and `file_tags` (legacy, unused)
+### `tags` and `file_tags` (unused)
 
-These are reserved for backward compatibility and are not used by the current CLI.
+These are reserved for potential future use and are not used by the current CLI.
+
+### `dir_sizes`
+
+Cached directory totals computed during indexing for fast `analyze`:
+
+```json
+{
+  "path": "/Users/alice/Downloads/projects",
+  "size": 987654321
+}
+```
+
+`dir_sizes_run_id` tracks the index run that produced the cache and is compared to `last_run_id` to confirm freshness.
 
 ---
 

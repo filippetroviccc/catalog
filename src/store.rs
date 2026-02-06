@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const STORE_VERSION: u32 = 1;
+const STORE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoreData {
@@ -26,6 +27,10 @@ pub struct StoreData {
     pub tags: Vec<TagEntry>,
     #[serde(default)]
     pub file_tags: Vec<FileTagEntry>,
+    #[serde(default)]
+    pub dir_sizes_run_id: i64,
+    #[serde(default)]
+    pub dir_sizes: Vec<DirSizeEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +70,12 @@ pub struct FileTagEntry {
     pub tag_id: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirSizeEntry {
+    pub path: String,
+    pub size: u64,
+}
+
 #[derive(Debug)]
 pub struct Store {
     pub path: PathBuf,
@@ -76,38 +87,24 @@ impl Store {
         if path.exists() {
             let raw = fs::read(path)
                 .with_context(|| format!("failed to read store: {}", path.display()))?;
-            let mut data: StoreData = match bincode::deserialize(&raw) {
-                Ok(data) => data,
-                Err(bin_err) => {
-                    let text = std::str::from_utf8(&raw).map_err(|_| {
-                        anyhow::anyhow!(
-                            "failed to decode store as binary; also not valid utf-8 ({})",
-                            bin_err
-                        )
-                    })?;
-                    serde_json::from_str(text).context("failed to parse legacy store json")?
-                }
-            };
+            let mut data: StoreData =
+                bincode::deserialize(&raw).context("failed to parse store binary")?;
+            if data.version > STORE_VERSION {
+                anyhow::bail!(
+                    "unsupported store version {} (expected <= {})",
+                    data.version,
+                    STORE_VERSION
+                );
+            }
+            if data.version < STORE_VERSION {
+                data.version = STORE_VERSION;
+            }
             data.ensure_counters();
             Ok(Self {
                 path: path.to_path_buf(),
                 data,
             })
         } else {
-            if let Some(legacy) = legacy_json_path(path) {
-                if legacy.exists() {
-                    let raw = fs::read_to_string(&legacy).with_context(|| {
-                        format!("failed to read legacy store: {}", legacy.display())
-                    })?;
-                    let mut data: StoreData = serde_json::from_str(&raw)
-                        .context("failed to parse legacy store json")?;
-                    data.ensure_counters();
-                    return Ok(Self {
-                        path: path.to_path_buf(),
-                        data,
-                    });
-                }
-            }
             Ok(Self {
                 path: path.to_path_buf(),
                 data: StoreData::new(),
@@ -148,14 +145,39 @@ pub fn prune_store(path: &Path) -> Result<usize> {
             .with_context(|| format!("failed to remove store: {}", path.display()))?;
         removed += 1;
     }
-    if let Some(legacy) = legacy_json_path(path) {
-        if legacy.exists() {
-            fs::remove_file(&legacy)
-                .with_context(|| format!("failed to remove legacy store: {}", legacy.display()))?;
-            removed += 1;
+    Ok(removed)
+}
+
+pub fn index_is_stale(
+    store: &StoreData,
+    filter: Option<&Path>,
+    max_age: ChronoDuration,
+) -> bool {
+    let now = Utc::now();
+    let mut any_relevant = false;
+
+    for root in &store.roots {
+        let root_path = Path::new(&root.path);
+        if let Some(filter_path) = filter {
+            if !filter_path.starts_with(root_path) && !root_path.starts_with(filter_path) {
+                continue;
+            }
+        }
+        any_relevant = true;
+        let ts = match &root.last_indexed_at {
+            Some(ts) => ts,
+            None => return true,
+        };
+        let parsed: DateTime<Utc> = match DateTime::parse_from_rfc3339(ts) {
+            Ok(dt) => dt.with_timezone(&Utc),
+            Err(_) => return true,
+        };
+        if now.signed_duration_since(parsed) > max_age {
+            return true;
         }
     }
-    Ok(removed)
+
+    !any_relevant
 }
 
 impl StoreData {
@@ -170,6 +192,8 @@ impl StoreData {
             files: Vec::new(),
             tags: Vec::new(),
             file_tags: Vec::new(),
+            dir_sizes_run_id: 0,
+            dir_sizes: Vec::new(),
         }
     }
 
@@ -237,13 +261,6 @@ fn tmp_path(path: &Path) -> PathBuf {
     tmp
 }
 
-fn legacy_json_path(path: &Path) -> Option<PathBuf> {
-    match path.extension().and_then(|ext| ext.to_str()) {
-        Some("json") => None,
-        _ => Some(path.with_extension("json")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,7 +280,7 @@ mod tests {
     #[test]
     fn store_round_trip_preserves_data() {
         let dir = temp_dir("round_trip");
-        let path = dir.join("store.json");
+        let path = dir.join("store.bin");
 
         let mut store = Store::load(&path).unwrap();
         let root_id = store.data.next_root_id();
@@ -366,5 +383,55 @@ mod tests {
         assert_eq!(decoded.files.len(), 1);
         assert_eq!(decoded.roots[0].path, "/tmp/root");
         assert_eq!(decoded.files[0].abs_path, "/tmp/root/file.txt");
+    }
+
+    #[test]
+    fn index_is_stale_checks_age_and_missing() {
+        let mut data = StoreData::new();
+        data.roots.push(RootEntry {
+            id: 1,
+            path: "/root".to_string(),
+            added_at: "now".to_string(),
+            preset_name: None,
+            last_indexed_at: Some((Utc::now() - ChronoDuration::hours(2)).to_rfc3339()),
+            one_filesystem: true,
+        });
+        assert!(
+            !index_is_stale(&data, None, ChronoDuration::days(1)),
+            "recent index should not be stale"
+        );
+        assert!(
+            index_is_stale(&data, None, ChronoDuration::hours(1)),
+            "older than threshold should be stale"
+        );
+
+        data.roots[0].last_indexed_at = None;
+        assert!(
+            index_is_stale(&data, None, ChronoDuration::days(1)),
+            "missing timestamp should be stale"
+        );
+    }
+
+    #[test]
+    fn index_is_stale_respects_filter() {
+        let mut data = StoreData::new();
+        data.roots.push(RootEntry {
+            id: 1,
+            path: "/root".to_string(),
+            added_at: "now".to_string(),
+            preset_name: None,
+            last_indexed_at: Some((Utc::now() - ChronoDuration::hours(2)).to_rfc3339()),
+            one_filesystem: true,
+        });
+        let filter = Path::new("/root/sub");
+        assert!(
+            !index_is_stale(&data, Some(filter), ChronoDuration::days(1)),
+            "filter within root should use root timestamp"
+        );
+        let filter = Path::new("/other");
+        assert!(
+            index_is_stale(&data, Some(filter), ChronoDuration::days(1)),
+            "no relevant roots should be stale"
+        );
     }
 }
