@@ -1,6 +1,6 @@
 ## Store Schema and Versioning
 
-This document defines the JSON store format and versioning strategy.
+This document defines the binary store format and versioning strategy. The on-disk snapshot is binary; JSON export is for debugging.
 
 ---
 
@@ -61,15 +61,9 @@ Top-level fields:
 }
 ```
 
-### `tags` and `file_tags`
+### `tags` and `file_tags` (legacy, unused)
 
-```json
-{ "id": 1, "name": "work" }
-```
-
-```json
-{ "file_id": 10, "tag_id": 1 }
-```
+These are reserved for backward compatibility and are not used by the current CLI.
 
 ---
 

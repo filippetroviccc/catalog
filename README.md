@@ -1,6 +1,6 @@
 # catalog
 
-Local-first CLI to index and search file metadata on macOS. No file contents are read. Metadata is stored in a JSON snapshot on disk.
+Local-first CLI to index and search file metadata on macOS. No file contents are read. Metadata is stored in a compact binary snapshot on disk (with JSON export for debugging).
 
 ## Install
 
@@ -85,9 +85,6 @@ catalog search log --min-size 1000 --max-size 100000
 # Restrict to a root
 catalog search build --root ~/Projects
 
-# Tags
-catalog search report --tag work
-
 # Long output (more metadata)
 catalog search report --long
 ```
@@ -98,14 +95,6 @@ catalog search report --long
 catalog recent
 catalog recent --days 3 --limit 20
 catalog recent --long
-```
-
-### Tags
-
-```sh
-catalog tag add /absolute/path/file.txt work
-catalog tag rm /absolute/path/file.txt work
-catalog tags
 ```
 
 ## Output
@@ -124,19 +113,34 @@ catalog recent --json
 Default paths:
 
 - Config: `~/Library/Application Support/catalog/config.toml`
-- Store: `~/Library/Application Support/catalog/catalog.json`
+- Store: `~/Library/Application Support/catalog/catalog.bin`
 
 Overrides:
 
 ```sh
 CATALOG_CONFIG=/path/to/config.toml catalog index
-CATALOG_STORE=/path/to/store.json catalog index
+CATALOG_STORE=/path/to/store.bin catalog index
 ```
 
 Legacy override (still accepted):
 
 ```sh
-CATALOG_DB=/path/to/store.json catalog index
+CATALOG_DB=/path/to/store.bin catalog index
+```
+
+## Export Store as JSON
+
+```sh
+catalog export
+catalog export --output /tmp/catalog.json
+```
+
+## Prune (Hard Reset)
+
+Remove all stored index data while keeping config:
+
+```sh
+catalog prune
 ```
 
 ## Notes

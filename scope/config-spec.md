@@ -7,7 +7,7 @@ This document defines the config file format, defaults, validation, and presets.
 ## Locations
 
 - Default config path: `~/Library/Application Support/catalog/config.toml`
-- Default store path: `~/Library/Application Support/catalog/catalog.json`
+- Default store path: `~/Library/Application Support/catalog/catalog.bin`
 - Env overrides:
   - `CATALOG_CONFIG` overrides config path
   - `CATALOG_STORE` overrides store path (legacy `CATALOG_DB` also accepted)

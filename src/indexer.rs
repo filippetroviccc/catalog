@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use walkdir::{DirEntry, WalkDir};
+use std::sync::mpsc;
+use std::thread;
 
 pub struct IndexStats {
     pub seen: usize,
@@ -31,7 +33,6 @@ struct ScannedFile {
 
 struct RootScanResult {
     root_id: i64,
-    root_path: String,
     files: Vec<ScannedFile>,
     stats: IndexStats,
     duration: Duration,
@@ -62,8 +63,15 @@ pub fn run(
     roots.sort_by(|a, b| a.path.cmp(&b.path));
 
     let multi = MultiProgress::new();
+    let overall = multi.add(ProgressBar::new(roots.len() as u64));
+    let overall_style =
+        ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} | {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar());
+    overall.set_style(overall_style);
+    overall.set_message("files 0 (updated 0, deleted 0, skipped 0)");
     let mut bars: HashMap<i64, ProgressBar> = HashMap::new();
     let mut handles = Vec::new();
+    let (tx, rx) = mpsc::channel();
 
     for root in roots {
         let pb = multi.add(ProgressBar::new_spinner());
@@ -73,40 +81,41 @@ pub fn run(
         let root_id = root.id;
         let one_fs = one_filesystem_override || root.one_filesystem;
         let pb_clone = pb.clone();
-        handles.push(std::thread::spawn(move || {
-            scan_root(&cfg, &root_path, root_id, one_fs, pb_clone)
+        let tx = tx.clone();
+        handles.push(thread::spawn(move || {
+            let res = scan_root(&cfg, &root_path, root_id, one_fs, pb_clone);
+            let _ = tx.send(res);
         }));
     }
+    drop(tx);
 
-    let mut results = Vec::new();
-    for handle in handles {
-        let res = handle.join().expect("indexer thread panicked")?;
-        results.push(res);
-    }
-
-    for result in results {
+    for res in rx {
+        let result = res?;
         let deleted = merge_root(&mut store.data, &result, run_id, full);
         total_seen += result.stats.seen;
         total_updated += result.stats.updated;
         total_deleted += deleted;
         total_skipped += result.stats.skipped;
-
+        overall.inc(1);
+        overall.set_message(format!(
+            "files {} (updated {}, deleted {}, skipped {})",
+            total_seen, total_updated, total_deleted, total_skipped
+        ));
         if let Some(pb) = bars.get(&result.root_id) {
             if result.root_missing {
-                pb.finish_with_message(format!("Root missing: {}", result.root_path));
+                pb.finish_with_message("missing");
             } else {
-                pb.finish_with_message(format!(
-                    "Finished root: {} in {:.2}s (seen {}, updated {}, deleted {}, skipped {})",
-                    result.root_path,
-                    result.duration.as_secs_f64(),
-                    result.stats.seen,
-                    result.stats.updated,
-                    deleted,
-                    result.stats.skipped
-                ));
+                pb.finish_with_message(format!("{:.2}s", result.duration.as_secs_f64()));
             }
         }
     }
+    for handle in handles {
+        handle.join().expect("indexer thread panicked");
+    }
+    overall.finish_with_message(format!(
+        "files {} (updated {}, deleted {}, skipped {})",
+        total_seen, total_updated, total_deleted, total_skipped
+    ));
 
     Ok(IndexStats {
         seen: total_seen,
@@ -129,7 +138,11 @@ fn scan_root(
     let style = ProgressStyle::with_template("{spinner:.green} {msg}")
         .unwrap_or_else(|_| ProgressStyle::default_spinner());
     progress.set_style(style);
-    progress.set_message(format!("Indexing root: {}", root));
+    let root_label = root_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(root);
+    progress.set_message(format!("Indexing {}", root_label));
     progress.enable_steady_tick(Duration::from_millis(120));
 
     if !root_path.exists() {
@@ -138,7 +151,6 @@ fn scan_root(
         progress.disable_steady_tick();
         return Ok(RootScanResult {
             root_id,
-            root_path: root.to_string(),
             files: Vec::new(),
             stats: IndexStats {
                 seen: 0,
@@ -238,8 +250,11 @@ fn scan_root(
         updated += 1;
         if seen % 5000 == 0 {
             progress.set_message(format!(
-                "Indexing root: {} (seen {}, updated {}, skipped {})",
-                root, seen, updated, skipped
+                "{} {}k (u{} s{})",
+                root_label,
+                seen / 1000,
+                updated / 1000,
+                skipped
             ));
         }
     }
@@ -262,14 +277,16 @@ fn scan_root(
     }
 
     progress.set_message(format!(
-        "Scanned root: {} (seen {}, updated {}, skipped {})",
-        root, seen, updated, skipped
+        "{} {}k (u{} s{})",
+        root_label,
+        seen / 1000,
+        updated / 1000,
+        skipped
     ));
     progress.disable_steady_tick();
 
     Ok(RootScanResult {
         root_id,
-        root_path: root.to_string(),
         files,
         stats: IndexStats {
             seen,
@@ -465,7 +482,7 @@ mod tests {
             excludes: vec!["**/node_modules/**".to_string()],
         };
 
-        let store_path = dir.join("catalog.json");
+        let store_path = dir.join("catalog.bin");
         let mut store = store::Store::load(&store_path).unwrap();
 
         let stats = run(&mut store, &cfg, false, false).unwrap();

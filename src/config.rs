@@ -133,7 +133,7 @@ pub fn default_config_path() -> Result<PathBuf> {
 
 pub fn default_store_path() -> Result<PathBuf> {
     let home = std::env::var_os("HOME").context("HOME not set")?;
-    Ok(PathBuf::from(home).join("Library/Application Support/catalog/catalog.json"))
+    Ok(PathBuf::from(home).join("Library/Application Support/catalog/catalog.bin"))
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<()> {

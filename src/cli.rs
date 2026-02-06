@@ -48,8 +48,6 @@ pub enum Commands {
         #[arg(long)]
         ext: Option<String>,
         #[arg(long)]
-        tag: Vec<String>,
-        #[arg(long)]
         after: Option<String>,
         #[arg(long)]
         before: Option<String>,
@@ -77,13 +75,6 @@ pub enum Commands {
         #[arg(long, alias = "details")]
         long: bool,
     },
-    /// Manage tags
-    Tag {
-        #[command(subcommand)]
-        command: TagCommands,
-    },
-    /// List tags
-    Tags,
     /// Watch for changes (polling)
     Watch {
         /// Poll interval in seconds
@@ -96,14 +87,14 @@ pub enum Commands {
         #[arg(long)]
         one_filesystem: bool,
     },
-}
-
-#[derive(Subcommand)]
-pub enum TagCommands {
-    /// Add a tag to a file by path or id
-    Add { target: String, tag: String },
-    /// Remove a tag from a file by path or id
-    Rm { target: String, tag: String },
+    /// Export store as JSON
+    Export {
+        /// Write JSON to a file instead of stdout
+        #[arg(long)]
+        output: Option<String>,
+    },
+    /// Remove all stored index state
+    Prune,
 }
 
 #[derive(Clone, Debug, ValueEnum)]

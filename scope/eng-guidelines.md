@@ -13,8 +13,7 @@ Core components and responsibilities:
 - Roots manager: add/remove/list roots, one-filesystem policy, excludes, last index time.
 - Indexer: walks files, computes metadata, performs incremental updates, soft deletes.
 - Store layer: JSON load/save, atomic writes, ID counters, and in-memory views.
-- Search engine: in-memory substring search + filters (ext, tag, size, time, root).
-- Tagging: tags table + join table, add/remove/list.
+- Search engine: in-memory substring search + filters (ext, size, time, root).
 - Output: plain or JSON, stable schema for scripting.
 - Logging: warnings, permission errors, summary per index run.
 
@@ -33,7 +32,7 @@ Core components and responsibilities:
 Suggested defaults (explicit, macOS-first):
 
 - Config path: `~/Library/Application Support/catalog/config.toml`
-- Store path: `~/Library/Application Support/catalog/catalog.json`
+- Store path: `~/Library/Application Support/catalog/catalog.bin`
 - Env overrides: `CATALOG_CONFIG`, `CATALOG_STORE` (legacy `CATALOG_DB`)
 - Config schema (TOML):
   - `roots = ["..."]`
@@ -53,19 +52,17 @@ On `init --preset`:
 
 ### Store Schema
 
-See `scope/schema.md` for the JSON store layout. Core collections:
+See `scope/schema.md` for the binary store layout (with JSON export). Core collections:
 
 - `roots`
 - `files`
-- `tags`
-- `file_tags`
 
 ### Search Query Strategy
 
 Case-insensitive substring on filename/path with in-memory filtering:
 
 - Lowercase the query and candidate path.
-- Filter by `ext`, `mtime` range, `size` range, `root_id`, and tags.
+- Filter by `ext`, `mtime` range, `size` range, `root_id`.
 - Always filter `status='active'`.
 
 ### Indexing Algorithm (Incremental)
@@ -85,7 +82,7 @@ Per root:
 
 ### Deletions
 
-Soft delete only. Never remove rows automatically. Tag associations remain. `search` excludes deleted by default.
+Soft delete only. Never remove rows automatically. `search` excludes deleted by default.
 
 ### Symlinks
 
@@ -146,11 +143,9 @@ Default: do not follow. Index symlink itself with `is_symlink = true`. Never tra
 - `src/ignore.rs`
   - Exclude matcher using `ignore` crate.
 - `src/store.rs`
-  - JSON store load/save, atomic writes, ID counters.
+  - Binary store load/save, atomic writes, ID counters, JSON export.
 - `src/search.rs`
   - In-memory search filters and query execution.
-- `src/tags.rs`
-  - Tag CRUD.
 - `src/output.rs`
   - Plain + JSON formatting.
 
@@ -185,17 +180,12 @@ Default: do not follow. Index symlink itself with `is_symlink = true`. Never tra
 
 - `query` is substring match across filename + path.
 - `--ext` is comma-separated.
-- `--tag` can be repeated or comma-separated.
 
 ### `catalog recent [--days N] [--limit N]`
 
 - Sort by `mtime DESC`.
 - Default `days=7`, `limit=50`.
 
-### `catalog tag add|rm <path|id> <tag>`
-
-- Resolve `path` to `file_id` via `abs_path`.
-- Tags are case-insensitive for uniqueness.
 
 ---
 
@@ -215,8 +205,7 @@ Default: do not follow. Index symlink itself with `is_symlink = true`. Never tra
 - Indexer inserts and updates files correctly.
 - Soft deletes are applied after missing file.
 - Search returns case-insensitive results.
-- Filters for ext, date, size, tag, root.
-- Tag add/remove works with path and id.
+- Filters for ext, date, size, root.
 - Permission errors don't crash.
 
 ---
@@ -225,4 +214,3 @@ Default: do not follow. Index symlink itself with `is_symlink = true`. Never tra
 
 - Config + store location: recommended `~/Library/Application Support/catalog/`.
 - Path normalization: store `abs_path` as joined root + rel path without canonicalizing.
-- Tag normalization: lowercase on insert for uniqueness.

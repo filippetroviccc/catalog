@@ -74,16 +74,40 @@ pub struct Store {
 impl Store {
     pub fn load(path: &Path) -> Result<Self> {
         if path.exists() {
-            let raw = fs::read_to_string(path)
+            let raw = fs::read(path)
                 .with_context(|| format!("failed to read store: {}", path.display()))?;
-            let mut data: StoreData =
-                serde_json::from_str(&raw).context("failed to parse store json")?;
+            let mut data: StoreData = match bincode::deserialize(&raw) {
+                Ok(data) => data,
+                Err(bin_err) => {
+                    let text = std::str::from_utf8(&raw).map_err(|_| {
+                        anyhow::anyhow!(
+                            "failed to decode store as binary; also not valid utf-8 ({})",
+                            bin_err
+                        )
+                    })?;
+                    serde_json::from_str(text).context("failed to parse legacy store json")?
+                }
+            };
             data.ensure_counters();
             Ok(Self {
                 path: path.to_path_buf(),
                 data,
             })
         } else {
+            if let Some(legacy) = legacy_json_path(path) {
+                if legacy.exists() {
+                    let raw = fs::read_to_string(&legacy).with_context(|| {
+                        format!("failed to read legacy store: {}", legacy.display())
+                    })?;
+                    let mut data: StoreData = serde_json::from_str(&raw)
+                        .context("failed to parse legacy store json")?;
+                    data.ensure_counters();
+                    return Ok(Self {
+                        path: path.to_path_buf(),
+                        data,
+                    });
+                }
+            }
             Ok(Self {
                 path: path.to_path_buf(),
                 data: StoreData::new(),
@@ -100,16 +124,38 @@ impl Store {
     pub fn save(&self) -> Result<()> {
         ensure_parent_dir(&self.path)?;
         let tmp_path = tmp_path(&self.path);
-        let data =
-            serde_json::to_string_pretty(&self.data).context("failed to serialize store json")?;
+        let data = bincode::serialize(&self.data).context("failed to serialize store")?;
         let mut file = File::create(&tmp_path)
             .with_context(|| format!("failed to write store: {}", tmp_path.display()))?;
-        file.write_all(data.as_bytes())?;
+        file.write_all(&data)?;
         file.sync_all()?;
         fs::rename(&tmp_path, &self.path)
             .with_context(|| format!("failed to finalize store: {}", self.path.display()))?;
         Ok(())
     }
+
+    pub fn export_json(&self) -> Result<String> {
+        let json =
+            serde_json::to_string_pretty(&self.data).context("failed to serialize store json")?;
+        Ok(json)
+    }
+}
+
+pub fn prune_store(path: &Path) -> Result<usize> {
+    let mut removed = 0;
+    if path.exists() {
+        fs::remove_file(path)
+            .with_context(|| format!("failed to remove store: {}", path.display()))?;
+        removed += 1;
+    }
+    if let Some(legacy) = legacy_json_path(path) {
+        if legacy.exists() {
+            fs::remove_file(&legacy)
+                .with_context(|| format!("failed to remove legacy store: {}", legacy.display()))?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 impl StoreData {
@@ -157,12 +203,6 @@ impl StoreData {
         id
     }
 
-    pub fn next_tag_id(&mut self) -> i64 {
-        let id = self.next_tag_id;
-        self.next_tag_id += 1;
-        id
-    }
-
     pub fn next_run_id(&mut self) -> i64 {
         self.last_run_id += 1;
         self.last_run_id
@@ -195,6 +235,13 @@ fn tmp_path(path: &Path) -> PathBuf {
         tmp.set_file_name("catalog.tmp");
     }
     tmp
+}
+
+fn legacy_json_path(path: &Path) -> Option<PathBuf> {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("json") => None,
+        _ => Some(path.with_extension("json")),
+    }
 }
 
 #[cfg(test)]
@@ -242,26 +289,14 @@ mod tests {
             status: "active".to_string(),
             last_seen_run: 1,
         });
-        let tag_id = store.data.next_tag_id();
-        store.data.tags.push(TagEntry {
-            id: tag_id,
-            name: "work".to_string(),
-        });
-        store.data.file_tags.push(FileTagEntry {
-            file_id,
-            tag_id,
-        });
 
         store.save().unwrap();
 
         let loaded = Store::load(&path).unwrap();
         assert_eq!(loaded.data.roots.len(), 1);
         assert_eq!(loaded.data.files.len(), 1);
-        assert_eq!(loaded.data.tags.len(), 1);
-        assert_eq!(loaded.data.file_tags.len(), 1);
         assert_eq!(loaded.data.roots[0].path, "/tmp/root");
         assert_eq!(loaded.data.files[0].abs_path, "/tmp/root/file.txt");
-        assert_eq!(loaded.data.tags[0].name, "work");
     }
 
     #[test]
@@ -269,7 +304,6 @@ mod tests {
         let mut data = StoreData::new();
         data.next_root_id = 1;
         data.next_file_id = 1;
-        data.next_tag_id = 1;
         data.roots.push(RootEntry {
             id: 5,
             path: "/tmp/root".to_string(),
@@ -291,13 +325,46 @@ mod tests {
             status: "active".to_string(),
             last_seen_run: 1,
         });
-        data.tags.push(TagEntry {
-            id: 9,
-            name: "work".to_string(),
-        });
         data.ensure_counters();
         assert_eq!(data.next_root_id, 6);
         assert_eq!(data.next_file_id, 8);
-        assert_eq!(data.next_tag_id, 10);
+    }
+
+    #[test]
+    fn export_json_round_trip() {
+        let mut store = Store {
+            path: PathBuf::from("/tmp/catalog.bin"),
+            data: StoreData::new(),
+        };
+        let root_id = store.data.next_root_id();
+        let file_id = store.data.next_file_id();
+        store.data.roots.push(RootEntry {
+            id: root_id,
+            path: "/tmp/root".to_string(),
+            added_at: "now".to_string(),
+            preset_name: None,
+            last_indexed_at: None,
+            one_filesystem: true,
+        });
+        store.data.files.push(FileEntry {
+            id: file_id,
+            root_id,
+            rel_path: "file.txt".to_string(),
+            abs_path: "/tmp/root/file.txt".to_string(),
+            is_dir: false,
+            is_symlink: false,
+            size: 1,
+            mtime: 2,
+            ext: Some("txt".to_string()),
+            status: "active".to_string(),
+            last_seen_run: 1,
+        });
+
+        let json = store.export_json().unwrap();
+        let decoded: StoreData = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.roots.len(), 1);
+        assert_eq!(decoded.files.len(), 1);
+        assert_eq!(decoded.roots[0].path, "/tmp/root");
+        assert_eq!(decoded.files[0].abs_path, "/tmp/root/file.txt");
     }
 }

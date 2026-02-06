@@ -9,7 +9,6 @@ This document lists MVP tests and fixtures.
 - Config load/save round trip.
 - Preset expansion picks correct roots.
 - Ignore matcher filters `node_modules` and `.git`.
-- Tag normalization and uniqueness.
 - CLI argument parsing for each command.
 
 ---
@@ -20,7 +19,7 @@ This document lists MVP tests and fixtures.
 - Incremental index with no changes is fast and minimal.
 - Soft delete on missing file after index run.
 - Search finds case-insensitive matches.
-- Search filters by ext, size, time, tag, root.
+- Search filters by ext, size, time, root.
 
 ---
 
@@ -30,4 +29,3 @@ This document lists MVP tests and fixtures.
 - Symlink cases to ensure no traversal.
 - Hidden files and directories.
 - Permission-denied directory simulation.
-

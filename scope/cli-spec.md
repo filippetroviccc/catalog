@@ -50,7 +50,7 @@ catalog init --preset macos-user-additions
 - `--full` forces rescan and marks missing items as deleted.
 - `--one-filesystem` overrides config for this run.
 
-### `catalog search <query> [--ext ...] [--tag ...] [--after ...] [--before ...] [--min-size ...] [--max-size ...] [--root ...] [--json]`
+### `catalog search <query> [--ext ...] [--after ...] [--before ...] [--min-size ...] [--max-size ...] [--root ...] [--json]`
 
 - Case-insensitive substring match on filename and path.
 - Filters are optional.
@@ -67,17 +67,14 @@ catalog search launch --after 2024-01-01 --root ~/Library/LaunchAgents
 - Lists recently modified files.
 - Defaults: `days=7`, `limit=50`.
 
-### `catalog tag add <path|id> <tag>`
+### `catalog export [--output <path>]`
 
-- Adds a tag to a file referenced by absolute path or file id.
+- Exports the store as JSON.
+- When `--output` is provided, writes to a file; otherwise prints to stdout.
 
-### `catalog tag rm <path|id> <tag>`
+### `catalog prune`
 
-- Removes a tag from a file referenced by absolute path or file id.
-
-### `catalog tags`
-
-- Lists tags and counts.
+- Removes all stored index data while keeping config.
 
 ### `catalog watch [--interval N] [--full] [--one-filesystem]`
 

@@ -19,9 +19,6 @@ The MVP is complete when all items below are met.
 - `catalog index --full` forces a full rescan.
 - `catalog search <query>` returns case-insensitive substring matches on filename and path.
 - `catalog recent` returns the most recently modified files.
-- `catalog tag add <path|id> <tag>` assigns a tag.
-- `catalog tag rm <path|id> <tag>` removes a tag.
-- `catalog tags` lists tags and counts.
 
 ### Functional Behavior
 
@@ -36,7 +33,7 @@ The MVP is complete when all items below are met.
 
 - Plain output format is stable: `id  mtime  size  path`.
 - `--json` produces stable machine-readable output.
-- Search filters work with `--ext`, `--after`, `--before`, `--min-size`, `--max-size`, `--root`, `--tag`.
+- Search filters work with `--ext`, `--after`, `--before`, `--min-size`, `--max-size`, `--root`.
 
 ### Performance Targets
 
@@ -49,9 +46,9 @@ The MVP is complete when all items below are met.
 
 ### In Scope (MVP)
 
-- macOS-first CLI with JSON store on disk.
+- macOS-first CLI with binary store on disk.
 - Presets for macOS user additions.
-- Incremental indexing, search, recent, tags.
+- Incremental indexing, search, recent.
 - Config in TOML.
 
 ### Out of Scope (MVP)

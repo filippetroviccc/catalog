@@ -5,7 +5,6 @@ mod output;
 mod roots;
 mod search;
 mod store;
-mod tags;
 mod util;
 
 use anyhow::{Context, Result};
@@ -77,7 +76,6 @@ fn main() -> Result<()> {
         cli::Commands::Search {
             query,
             ext,
-            tag,
             after,
             before,
             min_size,
@@ -94,7 +92,6 @@ fn main() -> Result<()> {
                 &cfg,
                 &query,
                 ext.as_deref(),
-                &tag,
                 after.as_deref(),
                 before.as_deref(),
                 min_size,
@@ -117,29 +114,6 @@ fn main() -> Result<()> {
             let use_json = json || matches!(cfg.output, config::OutputMode::Json);
             output::print_entries(&results, use_json, long)?;
         }
-        cli::Commands::Tag { command } => {
-            let _cfg = config::load(&paths.config_path)
-                .with_context(|| "config not found; run `catalog init`")?;
-            let mut store = store::Store::load(&paths.store_path)?;
-            match command {
-                cli::TagCommands::Add { target, tag } => {
-                    tags::add_tag(&mut store.data, &target, &tag)?;
-                    store.save()?;
-                    println!("Tag added.");
-                }
-                cli::TagCommands::Rm { target, tag } => {
-                    tags::remove_tag(&mut store.data, &target, &tag)?;
-                    store.save()?;
-                    println!("Tag removed.");
-                }
-            }
-        }
-        cli::Commands::Tags => {
-            let _cfg = config::load(&paths.config_path)
-                .with_context(|| "config not found; run `catalog init`")?;
-            let store = store::Store::load(&paths.store_path)?;
-            tags::list_tags(&store.data)?;
-        }
         cli::Commands::Watch {
             interval,
             full,
@@ -161,6 +135,35 @@ fn main() -> Result<()> {
                     stats.seen, stats.updated, stats.deleted, stats.skipped
                 );
                 std::thread::sleep(std::time::Duration::from_secs(interval));
+            }
+        }
+        cli::Commands::Export { output } => {
+            let store = store::Store::load(&paths.store_path)?;
+            let json = store.export_json()?;
+            match output {
+                Some(path) => {
+                    let out_path = util::normalize_path_allow_missing(&path)?;
+                    if let Some(parent) = out_path.parent() {
+                        std::fs::create_dir_all(parent).with_context(|| {
+                            format!("failed to create output dir: {}", parent.display())
+                        })?;
+                    }
+                    std::fs::write(&out_path, json).with_context(|| {
+                        format!("failed to write export: {}", out_path.display())
+                    })?;
+                    println!("Exported store to {}", out_path.display());
+                }
+                None => {
+                    println!("{}", json);
+                }
+            }
+        }
+        cli::Commands::Prune => {
+            let removed = store::prune_store(&paths.store_path)?;
+            if removed == 0 {
+                println!("No store found to remove.");
+            } else {
+                println!("Pruned {} store file(s).", removed);
             }
         }
     }

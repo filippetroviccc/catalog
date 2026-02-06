@@ -16,7 +16,7 @@ This document defines performance budgets and constraints for MVP.
 
 - Avoid duplicating the full store in memory beyond the snapshot.
 - Use streaming directory walk.
-- Use atomic writes when persisting the JSON store.
+- Use atomic writes when persisting the binary store.
 
 ---
 

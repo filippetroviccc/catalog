@@ -68,19 +68,17 @@ cargo run -- roots
 
 - **`cli.rs`**: Command-line argument parsing using `clap`. Defines all CLI commands and their parameters.
 - **`config.rs`**: Config file (TOML) load/save, preset expansion, path resolution. Handles `~/Library/Application Support/catalog/` defaults.
-- **`store.rs`**: JSON store load/save, atomic writes, and ID counters.
+- **`store.rs`**: Binary store load/save, atomic writes, ID counters, and JSON export.
 - **`indexer.rs`**: Directory walking with incremental update logic. Uses `walkdir` for traversal and `ignore` crate for gitignore-style excludes.
-- **`search.rs`**: SQL query builder for search with filters (ext, date, size, tag, root). Case-insensitive substring matching.
-- **`tags.rs`**: Tag CRUD operations with lowercase normalization for uniqueness.
+- **`search.rs`**: In-memory search with filters (ext, date, size, root). Case-insensitive substring matching.
 - **`roots.rs`**: Root path add/remove/sync logic with config and store.
 - **`output.rs`**: Plain text and JSON output formatting for search results.
 - **`util.rs`**: Shared utilities.
 
 ### Data Flow
 
-1. **Index**: Load config → Load JSON store → Walk roots with ignore rules → Upsert files (keyed by `root_id + rel_path`) → Mark missing files as deleted → Update root timestamps → Save store
+1. **Index**: Load config → Load binary store → Walk roots with ignore rules → Upsert files (keyed by `root_id + rel_path`) → Mark missing files as deleted → Update root timestamps → Save store
 2. **Search**: Parse query + filters → In-memory filter over store → Format output (plain or JSON)
-3. **Tag**: Resolve path/id to file_id → Insert/delete tag association → Save store
 
 ### Store Schema (JSON)
 
@@ -88,7 +86,6 @@ Top-level fields:
 - `version`, `last_run_id`, and `next_*_id` counters
 - `roots`: Indexed directory paths with `last_indexed_at` timestamps
 - `files`: File metadata (path, size, mtime, type) with status (`active`/`deleted`) and `last_seen_run`
-- `tags` + `file_tags`: Tag associations
 
 ### Incremental Indexing
 
@@ -126,7 +123,7 @@ Files are identified by `(root_id, rel_path)`. Each index run:
 
 ### Config Defaults
 - Config path: `~/Library/Application Support/catalog/config.toml`
-- Store path: `~/Library/Application Support/catalog/catalog.json`
+- Store path: `~/Library/Application Support/catalog/catalog.bin`
 - Env overrides: `CATALOG_CONFIG`, `CATALOG_STORE` (and legacy `CATALOG_DB`)
 
 ### Default Excludes

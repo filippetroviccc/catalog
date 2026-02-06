@@ -23,7 +23,6 @@ pub fn search(
     _cfg: &Config,
     query: &str,
     ext: Option<&str>,
-    tags: &[String],
     after: Option<&str>,
     before: Option<&str>,
     min_size: Option<u64>,
@@ -63,30 +62,6 @@ pub fn search(
         Some(v) => Some(parse_date_end_exclusive(v)?),
         None => None,
     };
-
-    let tag_filter = normalize_tag_list(tags);
-    let mut tag_ids = HashSet::new();
-    if !tag_filter.is_empty() {
-        let mut name_to_id = HashMap::new();
-        for tag in &store.data.tags {
-            name_to_id.insert(tag.name.clone(), tag.id);
-        }
-        for name in tag_filter {
-            if let Some(id) = name_to_id.get(&name) {
-                tag_ids.insert(*id);
-            }
-        }
-        if tag_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-    }
-
-    let mut file_tags = HashMap::new();
-    if !tag_ids.is_empty() {
-        for ft in &store.data.file_tags {
-            file_tags.entry(ft.file_id).or_insert_with(Vec::new).push(ft.tag_id);
-        }
-    }
 
     let mut root_map = HashMap::new();
     for root in &store.data.roots {
@@ -132,16 +107,6 @@ pub fn search(
         if !file.abs_path.to_lowercase().contains(&query_lc) {
             continue;
         }
-        if !tag_ids.is_empty() {
-            let matched = file_tags
-                .get(&file.id)
-                .map(|ids| ids.iter().any(|id| tag_ids.contains(id)))
-                .unwrap_or(false);
-            if !matched {
-                continue;
-            }
-        }
-
         let root_path = root_map
             .get(&file.root_id)
             .cloned()
@@ -206,19 +171,6 @@ pub fn recent(
     Ok(out)
 }
 
-fn normalize_tag_list(tags: &[String]) -> Vec<String> {
-    let mut out = Vec::new();
-    for t in tags {
-        for part in t.split(',') {
-            let s = part.trim().to_lowercase();
-            if !s.is_empty() {
-                out.push(s);
-            }
-        }
-    }
-    out
-}
-
 fn parse_date_start(date: &str) -> Result<i64> {
     let d = NaiveDate::parse_from_str(date, "%Y-%m-%d")
         .with_context(|| "invalid date, expected YYYY-MM-DD")?;
@@ -244,7 +196,7 @@ fn parse_date_end_exclusive(date: &str) -> Result<i64> {
 mod tests {
     use super::*;
     use crate::config::{Config, OutputMode};
-    use crate::{indexer, store, tags};
+    use crate::{indexer, store};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -268,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn search_filters_and_tags_work() {
+    fn search_filters_work() {
         let dir = temp_dir("search");
         let root = dir.join("root");
         fs::create_dir_all(&root).unwrap();
@@ -287,7 +239,7 @@ mod tests {
             excludes: vec![],
         };
 
-        let store_path = dir.join("catalog.json");
+        let store_path = dir.join("catalog.bin");
         let mut store = store::Store::load(&store_path).unwrap();
         indexer::run(&mut store, &cfg, false, false).unwrap();
         store.save().unwrap();
@@ -297,7 +249,6 @@ mod tests {
             &cfg,
             "file",
             Some("rs"),
-            &[],
             None,
             None,
             None,
@@ -307,22 +258,5 @@ mod tests {
         .unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].path.ends_with("file2.rs"));
-
-        tags::add_tag(&mut store.data, &file2.to_string_lossy(), "work").unwrap();
-        let tagged = search(
-            &store,
-            &cfg,
-            "file",
-            None,
-            &["work".to_string()],
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-        assert_eq!(tagged.len(), 1);
-        assert!(tagged[0].path.ends_with("file2.rs"));
     }
 }
