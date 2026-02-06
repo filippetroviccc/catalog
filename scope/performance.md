@@ -25,3 +25,15 @@ This document defines performance budgets and constraints for MVP.
 - Benchmark search with 100k, 250k, and 500k records.
 - Benchmark incremental index when no files change.
 - Record cold start and warm start times.
+
+---
+
+## Perf Smoke
+
+The `perf_smoke` binary provides a quick guardrail for indexing + analyze performance:
+
+```sh
+cargo run --bin perf_smoke
+```
+
+Use `CATALOG_PERF_*` env vars to scale data size and budgets when running locally or in CI.
