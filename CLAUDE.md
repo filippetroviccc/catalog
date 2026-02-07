@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`catalog` is a local-first CLI tool for indexing and searching files on macOS. It stores file metadata in a JSON snapshot on disk (no database dependency) and provides fast search capabilities without reading file contents.
+`catalog` is a local-first CLI tool for indexing and searching files on macOS. It stores file metadata in a binary snapshot on disk (no database dependency) and provides fast search capabilities without reading file contents.
 
 **Key principles:**
 - Metadata-only indexing (no file content reading in v1)
 - Incremental updates with soft deletes
 - Local-only, deterministic results
-- macOS-first with strong defaults for user-added files
+- macOS-first with preset-driven indexing scopes
 
 ## Commands
 
@@ -26,13 +26,13 @@ cargo build --release
 cargo install --path .
 
 # Run without installing
-cargo run -- <command>
+cargo run --bin catalog -- <command>
 
 # Run with debug logging (via --debug flag)
-cargo run -- --debug <command>
+cargo run --bin catalog -- --debug <command>
 
 # Or use RUST_LOG for fine-grained control
-RUST_LOG=debug cargo run -- <command>
+RUST_LOG=debug cargo run --bin catalog -- <command>
 ```
 
 ### Testing
@@ -54,43 +54,43 @@ cargo test <module_name>::
 ### Development Workflow
 ```bash
 # Initialize catalog (creates config + store)
-cargo run -- init --preset macos-user-additions
+cargo run --bin catalog -- init --preset macos-user-additions
 
 # Index configured roots
-cargo run -- index
+cargo run --bin catalog -- index
 
 # Full rescan (re-index everything)
-cargo run -- index --full
+cargo run --bin catalog -- index --full
 
 # Search for files
-cargo run -- search <query>
+cargo run --bin catalog -- search <query>
 
 # Search with filters
-cargo run -- search font --ext ttf,otf
-cargo run -- search log --min-size 1000 --max-size 100000
-cargo run -- search build --root ~/Projects --after 2024-01-01
+cargo run --bin catalog -- search font --ext ttf,otf
+cargo run --bin catalog -- search log --min-size 1000 --max-size 100000
+cargo run --bin catalog -- search build --root ~/Projects --after 2024-01-01
 
 # View recent files
-cargo run -- recent --days 3 --limit 20
+cargo run --bin catalog -- recent --days 3 --limit 20
 
 # Analyze disk usage (auto-refreshes if index is >1 day old)
-cargo run -- analyze ~/Projects --top 20 --files 20
+cargo run --bin catalog -- analyze ~/Projects --top 20 --files 20
 # Interactive browse (TUI, default)
-cargo run -- analyze
+cargo run --bin catalog -- analyze
 # Raw text report
-cargo run -- analyze --raw
+cargo run --bin catalog -- analyze --raw
 
 # Export store as JSON
-cargo run -- export --output /tmp/catalog.json
+cargo run --bin catalog -- export --output /tmp/catalog.json
 
 # Add custom root
-cargo run -- add ~/path/to/dir
+cargo run --bin catalog -- add ~/path/to/dir
 
 # View configured roots
-cargo run -- roots
+cargo run --bin catalog -- roots
 
 # Prune (hard reset - removes all index data, keeps config)
-cargo run -- prune
+cargo run --bin catalog -- prune
 ```
 
 ## CLI Commands Reference
@@ -98,9 +98,10 @@ cargo run -- prune
 ### Core Commands
 - `init [--preset <name>]`: Creates config and store. Presets: `macos-user-additions`, `macos-deep`, `macos-full`
 - `index [--full] [--one-filesystem]`: Incremental index (or full rescan with `--full`)
+- `watch [--interval N] [--full] [--one-filesystem]`: Polling loop that re-runs indexing
 - `search <query> [--ext] [--after] [--before] [--min-size] [--max-size] [--root] [--long] [--json]`: Search with filters
 - `recent [--days N] [--limit N] [--long] [--json]`: List recently modified files (defaults: 7 days, 50 limit)
-- `analyze [path] [--top N] [--files N] [--json]`: Disk usage analysis; auto-refreshes if index >1 day old
+- `analyze [path] [--top N] [--files N] [--json] [--raw] [--tui]`: Disk usage analysis; auto-refreshes if index >1 day old
 
 ### Configuration Commands
 - `roots`: View configured roots and settings
@@ -123,7 +124,7 @@ cargo run -- prune
 - **`cli.rs`**: Command-line argument parsing using `clap`. Defines all CLI commands and their parameters.
 - **`config.rs`**: Config file (TOML) load/save, preset expansion, path resolution. Handles `~/Library/Application Support/catalog/` defaults.
 - **`store.rs`**: Binary store load/save, atomic writes, ID counters, and JSON export.
-- **`indexer.rs`**: Directory walking with incremental update logic. Uses `walkdir` for traversal and `ignore` crate for gitignore-style excludes.
+- **`indexer.rs`**: Directory walking with incremental update logic. Uses `ignore::WalkBuilder` for parallel traversal and gitignore-style excludes.
 - **`search.rs`**: In-memory search with filters (ext, date, size, root). Case-insensitive substring matching.
 - **`roots.rs`**: Root path add/remove/sync logic with config and store.
 - **`output.rs`**: Plain text and JSON output formatting for search results.
@@ -134,9 +135,9 @@ cargo run -- prune
 
 1. **Index**: Load config → Load binary store → Walk roots with ignore rules → Upsert files (keyed by `root_id + rel_path`) → Mark missing files as deleted → Update root timestamps → Save store
 2. **Search**: Parse query + filters → In-memory filter over store → Format output (plain or JSON)
-3. **Analyze**: Reuse index scan results (or stored index) → Aggregate by directory/file → Report top usage + hidden space summary
+3. **Analyze**: Reuse index scan results (or stored index) → Aggregate by directory/file → Report top usage
 
-### Store Schema (JSON)
+### Store Schema
 
 Top-level fields:
 - `version`, `last_run_id`, and `next_*_id` counters
@@ -174,8 +175,8 @@ Files are identified by `(root_id, rel_path)`. Each index run:
 
 ### Error Handling
 - Exit code `0` on success
-- Exit code `1` on user error (show concise message + usage hint)
-- Exit code `2` on internal error (include storage path/context when relevant)
+- Exit code `1` on command/runtime errors
+- Exit code `2` on CLI parse/usage errors from clap
 
 ### Config Defaults
 - Config path: `~/Library/Application Support/catalog/config.toml`
@@ -193,7 +194,7 @@ Strong noise filters prevent indexing:
 Detailed specifications in `scope/`:
 - `prd-001.md`: Product requirements and user stories
 - `eng-guidelines.md`: Architecture and implementation rules
-- `schema.md`: Database schema and migration strategy
+- `schema.md`: Binary store schema and versioning strategy
 - `cli-spec.md`: CLI commands, flags, and output formats
 - `testing.md`: Test plan and fixtures
 - `indexing-rules.md`: File traversal and exclude logic

@@ -21,11 +21,13 @@ The MVP is complete when all items below are met.
 - `catalog search <query>` returns case-insensitive substring matches on filename and path.
 - `catalog recent` returns the most recently modified files.
 - `catalog analyze` reports largest folders/files.
+- `catalog watch` polls and re-indexes on an interval.
 
 ### Functional Behavior
 
 - Indexing is metadata-only. No file contents are read.
-- Indexing is incremental based on `size` and `mtime`.
+- Indexing maintains incremental state using `last_seen_run` and soft deletes.
+- Indexed metadata includes `size` and `mtime`.
 - Missing files are soft deleted, not removed from store.
 - Symlinks are not followed by default; the symlink itself may be indexed.
 - Excludes are applied before descending into directories.
@@ -33,7 +35,8 @@ The MVP is complete when all items below are met.
 
 ### Output Behavior
 
-- Plain output format is stable: `id  mtime  size  path`.
+- Default plain output for `search` and `recent` is stable: `path  size  YYYY-MM-DD`.
+- `--long` output for `search` and `recent` is stable: `id  YYYY-MM-DD HH:MM:SS  size  kind  ext  status  root  path`.
 - `--json` produces stable machine-readable output.
 - Search filters work with `--ext`, `--after`, `--before`, `--min-size`, `--max-size`, `--root`.
 
@@ -51,18 +54,18 @@ The MVP is complete when all items below are met.
 - macOS-first CLI with binary store on disk.
 - Presets for macOS user additions.
 - Incremental indexing, search, recent.
+- Polling watch mode.
 - Config in TOML.
 
 ### Out of Scope (MVP)
 
 - Cloud sync or multi-device.
-- Full system indexing of `/System`, `/private/var`, or equivalent.
 - OCR or PDF extraction.
 - AI ranking or embeddings.
 - Content indexing or FTS.
 
 ### Post-MVP (V1.1 and beyond)
 
-- `catalog watch` for filesystem notifications.
+- `catalog watch` using filesystem notifications (instead of polling).
 - Rename and move detection using inode/device.
 - Optional FTS for content search.

@@ -42,7 +42,7 @@ excludes = [
 
 - `version` must be an integer.
 - `output` must be `plain` or `json`.
-- `roots` must be a non-empty list of strings for indexing.
+- `roots` is a list of strings and may be empty.
 - `excludes` must be a list of strings.
 - Invalid config values should be rejected with a clear error.
 

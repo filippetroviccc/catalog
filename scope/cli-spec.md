@@ -10,8 +10,8 @@ This document defines CLI commands, flags, output formats, and exit codes.
 - `--json` switches output to JSON for scripting.
 - Exit codes:
   - `0` success
-  - `1` user error
-  - `2` internal error
+  - `1` command/runtime error
+  - `2` CLI parse/usage error (from clap)
 
 ---
 
@@ -50,7 +50,7 @@ catalog init --preset macos-user-additions
 - `--full` forces rescan and marks missing items as deleted.
 - `--one-filesystem` overrides config for this run.
 
-### `catalog search <query> [--ext ...] [--after ...] [--before ...] [--min-size ...] [--max-size ...] [--root ...] [--json]`
+### `catalog search <query> [--ext ...] [--after ...] [--before ...] [--min-size ...] [--max-size ...] [--root ...] [--json] [--long]`
 
 - Case-insensitive substring match on filename and path.
 - Filters are optional.
@@ -62,7 +62,7 @@ catalog search font --ext ttf,otf
 catalog search launch --after 2024-01-01 --root ~/Library/LaunchAgents
 ```
 
-### `catalog recent [--days N] [--limit N]`
+### `catalog recent [--days N] [--limit N] [--json] [--long]`
 
 - Lists recently modified files.
 - Defaults: `days=7`, `limit=50`.
@@ -98,8 +98,10 @@ catalog search launch --after 2024-01-01 --root ~/Library/LaunchAgents
 
 ### Plain Output
 
-- Search and recent output format:
-  - `id  mtime  size  path`
+- Default `search` and `recent` output:
+  - `path  size  YYYY-MM-DD`
+- `--long` `search` and `recent` output:
+  - `id  YYYY-MM-DD HH:MM:SS  size  kind  ext  status  root  path`
 
 ### JSON Output
 
@@ -107,7 +109,7 @@ catalog search launch --after 2024-01-01 --root ~/Library/LaunchAgents
 - Fields:
   - `id` integer
   - `path` string
-  - `mtime` string, RFC 3339 or `YYYY-MM-DD HH:MM:SS`
+  - `mtime` integer (unix seconds)
   - `size` integer
   - `is_dir` boolean
   - `is_symlink` boolean
