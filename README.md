@@ -1,6 +1,6 @@
 # Catalog
 
-Fast local file system indexing and analysis for macOS.
+Fast local file system indexing, search & storage analyzer.
 
 `catalog` helps you:
 - **Analyze disk usage** to spot space hogs quickly
@@ -27,6 +27,12 @@ cargo install --path .
 ```
 
 Make sure `~/.cargo/bin` is in your `PATH`.
+
+Run without installing:
+
+```sh
+cargo run --bin catalog -- <command>
+```
 
 ## Quick Start
 
@@ -108,7 +114,7 @@ catalog recent --long --json
 Keep your file index up to date:
 
 ```sh
-# Incremental index (fast, only scans changes)
+# Incremental index (fast metadata walk with incremental state updates)
 catalog index
 
 # Full rescan (re-index everything)
@@ -174,7 +180,7 @@ catalog analyze --top 20 --files 20 # Show top directories and files
 ```
 
 ### Incremental Indexing
-Only scans what's changed since the last run:
+Maintains an incremental snapshot and soft deletes across full metadata walks:
 ```sh
 catalog index              # Fast incremental update
 catalog index --full       # Complete rescan
@@ -196,7 +202,7 @@ CATALOG_STORE=/path/to/store.bin catalog index
 ## How It Works
 
 - **Metadata-only indexing** — File contents are never read, only metadata (size, mtime, extension)
-- **Incremental updates** — Only scans what changed since last run
+- **Incremental state** — Maintains `active/deleted` status across repeated metadata walks
 - **Soft deletes** — Missing files are marked as deleted, not removed
 - **Smart excludes** — Skips noise like `.git`, `node_modules`, `~/Library/Caches` by default
 - **Local-first** — All data stays on your machine in a compact binary format
@@ -207,7 +213,7 @@ Choose an indexing scope when you initialize:
 
 - `macos-user-additions` — Only user-added files (Documents, Downloads, Desktop, etc.)
 - `macos-deep` — User files + common dev directories
-- `macos-full` — Everything except system noise
+- `macos-full` — Root `/` with `include_hidden=true`, `excludes=[]`, `one_filesystem=true`
 
 ```sh
 catalog init --preset macos-user-additions

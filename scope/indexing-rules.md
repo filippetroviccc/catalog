@@ -57,9 +57,9 @@ For each indexed entry store:
 
 ## Change Detection
 
-- A file is considered changed if either `size` or `mtime` differs.
-- When unchanged, update only `last_seen_run`.
-- When changed, update metadata and `last_seen_run`.
+- Entries are upserted by `(root_id, rel_path)` on every run.
+- Current implementation updates metadata fields and `last_seen_run` for each seen entry.
+- `size` and `mtime` are captured each run and stored for downstream filtering/sorting.
 
 ---
 
@@ -74,4 +74,3 @@ For each indexed entry store:
 
 - Permission errors are logged and do not abort.
 - A summary of skipped paths is printed at the end of the run.
-

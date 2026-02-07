@@ -14,8 +14,8 @@ This document defines logging, error handling, and operational behavior.
 
 ## Permission Errors
 
-- Log each unique permission error once per root.
-- Print a summary at end of index with counts.
+- Continue indexing when permission errors occur.
+- Print a per-root summary count of skipped permission entries.
 
 ---
 

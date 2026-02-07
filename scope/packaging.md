@@ -6,8 +6,8 @@ This document defines MVP packaging and release expectations.
 
 ## Build and Install
 
-- Primary: `cargo install catalog`.
-- Optional: Homebrew formula in a later milestone.
+- From source: `cargo install --path .`.
+- Homebrew tap is supported for macOS Apple Silicon.
 
 ---
 
@@ -25,4 +25,3 @@ This document defines MVP packaging and release expectations.
 - Update changelog.
 - Run tests.
 - Tag release.
-
