@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use catalog::analyze;
 use catalog::config::{Config, OutputMode};
 use catalog::indexer;
+use catalog::search::{self, SearchFilters};
 use catalog::store::Store;
 use std::env;
 use std::fs::{self, File};
@@ -16,6 +17,14 @@ fn main() -> Result<()> {
     let max_index = env_duration("CATALOG_PERF_MAX_INDEX_SECS", default_max_index_secs());
     let max_analyze = env_duration("CATALOG_PERF_MAX_ANALYZE_SECS", default_max_analyze_secs());
     let max_browse = env_duration("CATALOG_PERF_MAX_BROWSE_SECS", default_max_browse_secs());
+    let max_search = Duration::from_millis(env_u64(
+        "CATALOG_PERF_MAX_SEARCH_MS",
+        default_max_search_ms(),
+    ));
+    let max_noop_save = Duration::from_millis(env_u64(
+        "CATALOG_PERF_MAX_NOOP_SAVE_MS",
+        default_max_noop_save_ms(),
+    ));
 
     let base = temp_dir("perf_smoke");
     let root = base.join("root");
@@ -48,6 +57,15 @@ fn main() -> Result<()> {
         .filter(|f| !f.is_dir && f.status == "active")
         .count();
 
+    // No-op reindex: nothing changed on disk. The merge-join should find every file
+    // unchanged, so `save()` rewrites only the tiny manifest (no segments).
+    let noop_index_start = Instant::now();
+    indexer::run(&mut store, &cfg, false, false)?;
+    let noop_index_elapsed = noop_index_start.elapsed();
+    let noop_save_start = Instant::now();
+    store.save()?;
+    let noop_save_elapsed = noop_save_start.elapsed();
+
     let analyze_start = Instant::now();
     let report = analyze::analyze_store_with_progress(&store, None, 20, 20, None);
     let analyze_elapsed = analyze_start.elapsed();
@@ -56,14 +74,40 @@ fn main() -> Result<()> {
     let browse = analyze::browse_index_from_store_with_progress(&store, None, None);
     let browse_elapsed = browse_start.elapsed();
 
+    // Worst-case search: a substring that matches every indexed file, forcing a full
+    // linear scan plus materialization of every result.
+    let broad_query = ".dat";
+    let search_start = Instant::now();
+    let search_hits = search::search(&store, &cfg, broad_query, &SearchFilters::default())?.len();
+    let search_elapsed = search_start.elapsed();
+
+    // Scan-only floor: a substring that matches nothing still touches every entry but
+    // builds no results — this is closer to a realistic, selective query's cost.
+    let scan_start = Instant::now();
+    let scan_hits =
+        search::search(&store, &cfg, "zzz_no_match_zzz", &SearchFilters::default())?.len();
+    let scan_elapsed = scan_start.elapsed();
+
     println!("perf_smoke:");
     println!("  roots: {}", cfg.roots.len());
     println!("  files created: {}", total_files);
     println!("  files indexed: {} (seen {})", indexed_files, stats.seen);
     println!("  expected total size: {} bytes", expected_total_size);
     println!("  index:  {:?}", index_elapsed);
+    println!(
+        "  reindex no-op: walk {:?}, save {:?}",
+        noop_index_elapsed, noop_save_elapsed
+    );
     println!("  analyze: {:?}", analyze_elapsed);
     println!("  browse: {:?}", browse_elapsed);
+    println!(
+        "  search (broad '{}', {} hits): {:?}",
+        broad_query, search_hits, search_elapsed
+    );
+    println!(
+        "  search (scan-only, {} hits): {:?}",
+        scan_hits, scan_elapsed
+    );
 
     if indexed_files != total_files {
         anyhow::bail!(
@@ -90,7 +134,11 @@ fn main() -> Result<()> {
     }
 
     if index_elapsed > max_index {
-        anyhow::bail!("index exceeded budget: {:?} > {:?}", index_elapsed, max_index);
+        anyhow::bail!(
+            "index exceeded budget: {:?} > {:?}",
+            index_elapsed,
+            max_index
+        );
     }
     if analyze_elapsed > max_analyze {
         anyhow::bail!(
@@ -100,7 +148,29 @@ fn main() -> Result<()> {
         );
     }
     if browse_elapsed > max_browse {
-        anyhow::bail!("browse exceeded budget: {:?} > {:?}", browse_elapsed, max_browse);
+        anyhow::bail!(
+            "browse exceeded budget: {:?} > {:?}",
+            browse_elapsed,
+            max_browse
+        );
+    }
+    // Budget the scan-only (selective) query — it is the representative cost for the
+    // "<100ms" target. The broad all-match query is reported but not budgeted: it is a
+    // pathological case dominated by materializing one result row per indexed file.
+    if scan_elapsed > max_search {
+        anyhow::bail!(
+            "search exceeded budget: {:?} > {:?} (broad all-match was {:?}, informational)",
+            scan_elapsed,
+            max_search,
+            search_elapsed
+        );
+    }
+    if noop_save_elapsed > max_noop_save {
+        anyhow::bail!(
+            "no-op reindex save exceeded budget: {:?} > {:?}",
+            noop_save_elapsed,
+            max_noop_save
+        );
     }
 
     if env::var("CATALOG_PERF_KEEP").is_err() {
@@ -121,7 +191,11 @@ fn populate_tree(root: &Path, dirs: usize, files_per_dir: usize, file_size: u64)
             .with_context(|| format!("failed to create dir: {}", nested_path.display()))?;
 
         for file_idx in 0..files_per_dir {
-            let target_dir = if file_idx % 2 == 0 { &dir_path } else { &nested_path };
+            let target_dir = if file_idx % 2 == 0 {
+                &dir_path
+            } else {
+                &nested_path
+            };
             let file_path = target_dir.join(format!("file_{:04}.dat", file_idx));
             let file = File::create(&file_path)
                 .with_context(|| format!("failed to create file: {}", file_path.display()))?;
@@ -165,25 +239,25 @@ fn env_duration(name: &str, default_secs: u64) -> Duration {
 }
 
 fn default_max_index_secs() -> u64 {
-    if cfg!(debug_assertions) {
-        20
-    } else {
-        8
-    }
+    if cfg!(debug_assertions) { 20 } else { 8 }
 }
 
 fn default_max_analyze_secs() -> u64 {
-    if cfg!(debug_assertions) {
-        6
-    } else {
-        3
-    }
+    if cfg!(debug_assertions) { 6 } else { 3 }
 }
 
 fn default_max_browse_secs() -> u64 {
-    if cfg!(debug_assertions) {
-        6
-    } else {
-        3
-    }
+    if cfg!(debug_assertions) { 6 } else { 3 }
+}
+
+fn default_max_search_ms() -> u64 {
+    // Target is <100ms for 100k-500k entries (release). Debug builds run the linear
+    // scan unoptimized, so allow more headroom there.
+    if cfg!(debug_assertions) { 1500 } else { 100 }
+}
+
+fn default_max_noop_save_ms() -> u64 {
+    // A no-op reindex writes only the manifest (no file segments), so this should be
+    // tiny regardless of store size. Generous to avoid CI flakiness.
+    if cfg!(debug_assertions) { 800 } else { 300 }
 }

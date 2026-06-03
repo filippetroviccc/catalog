@@ -1,4 +1,5 @@
 use crate::indexer::{ScanObserver, ScannedFile};
+use crate::util::human_size;
 use anyhow::Result;
 use serde::Serialize;
 use std::cmp::Reverse;
@@ -115,32 +116,32 @@ impl BrowseIndexBuilder {
         });
         let mut children: HashMap<PathBuf, Vec<BrowseEntry>> = HashMap::new();
         for dir in &self.dirs {
-            if let Some(parent) = dir.parent() {
-                if self.dir_totals.contains_key(parent) {
-                    let size = self.dir_totals.get(dir).copied().unwrap_or(0);
-                    children
-                        .entry(parent.to_path_buf())
-                        .or_default()
-                        .push(BrowseEntry {
-                            path: dir.clone(),
-                            size,
-                            is_dir: true,
-                        });
-                }
+            if let Some(parent) = dir.parent()
+                && self.dir_totals.contains_key(parent)
+            {
+                let size = self.dir_totals.get(dir).copied().unwrap_or(0);
+                children
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .push(BrowseEntry {
+                        path: dir.clone(),
+                        size,
+                        is_dir: true,
+                    });
             }
         }
         for (path, size) in &self.file_sizes {
-            if let Some(parent) = path.parent() {
-                if self.dir_totals.contains_key(parent) {
-                    children
-                        .entry(parent.to_path_buf())
-                        .or_default()
-                        .push(BrowseEntry {
-                            path: path.clone(),
-                            size: *size,
-                            is_dir: false,
-                        });
-                }
+            if let Some(parent) = path.parent()
+                && self.dir_totals.contains_key(parent)
+            {
+                children
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .push(BrowseEntry {
+                        path: path.clone(),
+                        size: *size,
+                        is_dir: false,
+                    });
             }
         }
         for entries in children.values_mut() {
@@ -173,10 +174,10 @@ impl BrowseIndexBuilder {
             })
             .unwrap_or(root_path);
 
-        if let Some(filter) = &self.filter {
-            if !file_path.starts_with(filter) {
-                return;
-            }
+        if let Some(filter) = &self.filter
+            && !file_path.starts_with(filter)
+        {
+            return;
         }
 
         self.total_scanned += size;
@@ -232,7 +233,7 @@ impl Analyzer {
                 size,
             })
             .collect::<Vec<_>>();
-        root_entries.sort_by(|a, b| b.size.cmp(&a.size));
+        root_entries.sort_by_key(|r| Reverse(r.size));
         AnalysisResult {
             total_scanned: self.total_scanned,
             roots: root_entries,
@@ -254,10 +255,10 @@ impl Analyzer {
             })
             .unwrap_or(root_path);
 
-        if let Some(filter) = &self.filter {
-            if !file_path.starts_with(filter) {
-                return;
-            }
+        if let Some(filter) = &self.filter
+            && !file_path.starts_with(filter)
+        {
+            return;
         }
 
         self.total_scanned += size;
@@ -317,14 +318,7 @@ pub fn analyze_store_with_progress(
     mut progress: Option<&mut dyn FnMut(usize)>,
 ) -> AnalysisResult {
     if let Some(dir_totals) = load_dir_size_cache(store) {
-        return analyze_store_with_cache(
-            store,
-            filter,
-            top_dirs,
-            top_files,
-            dir_totals,
-            progress,
-        );
+        return analyze_store_with_cache(store, filter, top_dirs, top_files, dir_totals, progress);
     }
     let mut analyzer = Analyzer::new(filter, top_dirs, top_files);
     let mut roots = HashMap::new();
@@ -347,13 +341,13 @@ pub fn analyze_store_with_progress(
         let file_path = Path::new(&file.abs_path);
         analyzer.ingest_file(root_path, file_path, size);
         processed += 1;
-        if processed % 50_000 == 0 {
-            if let Some(cb) = progress.as_deref_mut() {
-                cb(processed);
-            }
+        if processed.is_multiple_of(50_000)
+            && let Some(cb) = progress.as_deref_mut()
+        {
+            cb(processed);
         }
     }
-    if let Some(cb) = progress.as_deref_mut() {
+    if let Some(cb) = progress {
         cb(processed);
     }
     analyzer.finalize()
@@ -394,13 +388,13 @@ pub fn browse_index_from_store_with_progress(
         let file_path = Path::new(&file.abs_path);
         builder.ingest_file(root_path, file_path, size);
         processed += 1;
-        if processed % 50_000 == 0 {
-            if let Some(cb) = progress.as_deref_mut() {
-                cb(processed);
-            }
+        if processed.is_multiple_of(50_000)
+            && let Some(cb) = progress.as_deref_mut()
+        {
+            cb(processed);
         }
     }
-    if let Some(cb) = progress.as_deref_mut() {
+    if let Some(cb) = progress {
         cb(processed);
     }
     builder.finalize()
@@ -451,23 +445,23 @@ fn analyze_store_with_cache(
             continue;
         }
         let file_path = Path::new(&file.abs_path);
-        if let Some(filter) = &filter {
-            if !file_path.starts_with(filter) {
-                continue;
-            }
+        if let Some(filter) = &filter
+            && !file_path.starts_with(filter)
+        {
+            continue;
         }
         total_scanned += size;
         *root_totals.entry(root_path.to_path_buf()).or_insert(0) += size;
         top_files_acc.push(file.abs_path.clone(), size);
 
         processed += 1;
-        if processed % 50_000 == 0 {
-            if let Some(cb) = progress.as_deref_mut() {
-                cb(processed);
-            }
+        if processed.is_multiple_of(50_000)
+            && let Some(cb) = progress.as_deref_mut()
+        {
+            cb(processed);
         }
     }
-    if let Some(cb) = progress.as_deref_mut() {
+    if let Some(cb) = progress {
         cb(processed);
     }
 
@@ -476,10 +470,10 @@ fn analyze_store_with_cache(
         if size == 0 {
             continue;
         }
-        if let Some(filter) = &filter {
-            if !path.starts_with(filter) {
-                continue;
-            }
+        if let Some(filter) = &filter
+            && !path.starts_with(filter)
+        {
+            continue;
         }
         dir_top.push(path.to_string_lossy().to_string(), size);
     }
@@ -491,7 +485,7 @@ fn analyze_store_with_cache(
             size,
         })
         .collect::<Vec<_>>();
-    root_entries.sort_by(|a, b| b.size.cmp(&a.size));
+    root_entries.sort_by_key(|r| Reverse(r.size));
 
     AnalysisResult {
         total_scanned,
@@ -538,10 +532,10 @@ fn browse_index_from_cache(
             continue;
         }
         let file_path = Path::new(&file.abs_path);
-        if let Some(filter) = &filter {
-            if !file_path.starts_with(filter) {
-                continue;
-            }
+        if let Some(filter) = &filter
+            && !file_path.starts_with(filter)
+        {
+            continue;
         }
 
         total_scanned += size;
@@ -549,13 +543,13 @@ fn browse_index_from_cache(
         file_sizes.insert(PathBuf::from(&file.abs_path), size);
 
         processed += 1;
-        if processed % 50_000 == 0 {
-            if let Some(cb) = progress.as_deref_mut() {
-                cb(processed);
-            }
+        if processed.is_multiple_of(50_000)
+            && let Some(cb) = progress.as_deref_mut()
+        {
+            cb(processed);
         }
     }
-    if let Some(cb) = progress.as_deref_mut() {
+    if let Some(cb) = progress {
         cb(processed);
     }
 
@@ -580,32 +574,32 @@ fn browse_index_from_cache(
     let dir_set: HashSet<PathBuf> = dir_totals.keys().cloned().collect();
     let mut children: HashMap<PathBuf, Vec<BrowseEntry>> = HashMap::new();
     for dir in &dir_set {
-        if let Some(parent) = dir.parent() {
-            if dir_set.contains(parent) {
-                let size = dir_totals.get(dir).copied().unwrap_or(0);
-                children
-                    .entry(parent.to_path_buf())
-                    .or_default()
-                    .push(BrowseEntry {
-                        path: dir.clone(),
-                        size,
-                        is_dir: true,
-                    });
-            }
+        if let Some(parent) = dir.parent()
+            && dir_set.contains(parent)
+        {
+            let size = dir_totals.get(dir).copied().unwrap_or(0);
+            children
+                .entry(parent.to_path_buf())
+                .or_default()
+                .push(BrowseEntry {
+                    path: dir.clone(),
+                    size,
+                    is_dir: true,
+                });
         }
     }
     for (path, size) in &file_sizes {
-        if let Some(parent) = path.parent() {
-            if dir_set.contains(parent) {
-                children
-                    .entry(parent.to_path_buf())
-                    .or_default()
-                    .push(BrowseEntry {
-                        path: path.clone(),
-                        size: *size,
-                        is_dir: false,
-                    });
-            }
+        if let Some(parent) = path.parent()
+            && dir_set.contains(parent)
+        {
+            children
+                .entry(parent.to_path_buf())
+                .or_default()
+                .push(BrowseEntry {
+                    path: path.clone(),
+                    size: *size,
+                    is_dir: false,
+                });
         }
     }
     for entries in children.values_mut() {
@@ -638,12 +632,7 @@ pub fn print_report(result: &AnalysisResult, json: bool) -> Result<()> {
         println!("  (none)");
     } else {
         for (idx, entry) in result.roots.iter().enumerate() {
-            println!(
-                "  {}. {}  {}",
-                idx + 1,
-                entry.path,
-                human_size(entry.size)
-            );
+            println!("  {}. {}  {}", idx + 1, entry.path, human_size(entry.size));
         }
     }
     println!("\nTop folders:");
@@ -651,12 +640,7 @@ pub fn print_report(result: &AnalysisResult, json: bool) -> Result<()> {
         println!("  (none)");
     } else {
         for (idx, entry) in result.top_dirs.iter().enumerate() {
-            println!(
-                "  {}. {}  {}",
-                idx + 1,
-                entry.path,
-                human_size(entry.size)
-            );
+            println!("  {}. {}  {}", idx + 1, entry.path, human_size(entry.size));
         }
     }
 
@@ -665,31 +649,11 @@ pub fn print_report(result: &AnalysisResult, json: bool) -> Result<()> {
         println!("  (none)");
     } else {
         for (idx, entry) in result.top_files.iter().enumerate() {
-            println!(
-                "  {}. {}  {}",
-                idx + 1,
-                entry.path,
-                human_size(entry.size)
-            );
+            println!("  {}. {}  {}", idx + 1, entry.path, human_size(entry.size));
         }
     }
 
     Ok(())
-}
-
-pub(crate) fn human_size(bytes: u64) -> String {
-    let units = ["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut idx = 0;
-    while value >= 1024.0 && idx < units.len() - 1 {
-        value /= 1024.0;
-        idx += 1;
-    }
-    if idx == 0 {
-        format!("{}{}", bytes, units[idx])
-    } else {
-        format!("{:.1}{}", value, units[idx])
-    }
 }
 
 struct TopN {
@@ -713,11 +677,11 @@ impl TopN {
             self.heap.push((Reverse(size), path));
             return;
         }
-        if let Some((Reverse(min), _)) = self.heap.peek() {
-            if size > *min {
-                self.heap.pop();
-                self.heap.push((Reverse(size), path));
-            }
+        if let Some((Reverse(min), _)) = self.heap.peek()
+            && size > *min
+        {
+            self.heap.pop();
+            self.heap.push((Reverse(size), path));
         }
     }
 
@@ -727,7 +691,7 @@ impl TopN {
             .into_iter()
             .map(|(Reverse(size), path)| UsageEntry { path, size })
             .collect::<Vec<_>>();
-        items.sort_by(|a, b| b.size.cmp(&a.size));
+        items.sort_by_key(|i| Reverse(i.size));
         items
     }
 }
@@ -789,6 +753,8 @@ mod tests {
         let mut store = Store {
             path: PathBuf::from("/tmp/catalog.bin"),
             data: StoreData::new(),
+            dirty: crate::store::Dirty::All,
+            degraded: false,
         };
         store.data.roots.push(RootEntry {
             id: 1,
@@ -824,6 +790,8 @@ mod tests {
         let mut store = Store {
             path: PathBuf::from("/tmp/catalog.bin"),
             data: StoreData::new(),
+            dirty: crate::store::Dirty::All,
+            degraded: false,
         };
         store.data.roots.push(RootEntry {
             id: 1,
@@ -860,7 +828,8 @@ mod tests {
             last_seen_run: 1,
         });
 
-        let result = analyze_store_with_progress(&store, Some(PathBuf::from("/root/keep")), 5, 5, None);
+        let result =
+            analyze_store_with_progress(&store, Some(PathBuf::from("/root/keep")), 5, 5, None);
         assert_eq!(result.total_scanned, 2048);
         assert_eq!(result.roots.len(), 1);
         assert_eq!(result.roots[0].path, "/root");

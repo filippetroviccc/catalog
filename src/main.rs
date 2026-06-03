@@ -13,6 +13,17 @@ use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use tracing_subscriber::EnvFilter;
 
+/// Read-only commands cannot self-heal a damaged index, so warn the user to rebuild.
+/// (Mutating commands like `index`/`analyze` recover automatically by reindexing.)
+fn warn_if_degraded(store: &store::Store) {
+    if store.degraded {
+        eprintln!(
+            "warning: the index is incomplete or damaged; results may be partial. \
+             Run `catalog index` to rebuild."
+        );
+    }
+}
+
 fn main() -> Result<()> {
     let cli = cli::Cli::parse();
     let filter = if cli.debug {
@@ -26,6 +37,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         cli::Commands::Init { preset } => {
+            let _lock = store::StoreLock::acquire(&paths.store_path)?;
             let preset_name = preset.as_ref().map(|p| p.to_string());
             config::init(&paths, preset.clone())?;
             let mut store = store::Store::init(&paths.store_path)?;
@@ -39,19 +51,37 @@ fn main() -> Result<()> {
             let cfg = config::load(&paths.config_path)
                 .with_context(|| "config not found; run `catalog init`")?;
             let store = store::Store::load(&paths.store_path)?;
+            warn_if_degraded(&store);
             roots::print_roots(&store.data, &cfg)?;
         }
         cli::Commands::Add { paths: add_paths } => {
+            let _lock = store::StoreLock::acquire(&paths.store_path)?;
             let mut cfg = config::load(&paths.config_path)
                 .with_context(|| "config not found; run `catalog init`")?;
-            let added = roots::add_roots(&mut cfg, &add_paths)?;
+            let outcome = roots::add_roots(&mut cfg, &add_paths)?;
             config::save(&paths.config_path, &cfg)?;
             let mut store = store::Store::load(&paths.store_path)?;
             roots::sync_roots(&mut store.data, &cfg, None)?;
             store.save()?;
-            println!("Added {} root(s).", added);
+            println!("Added {} root(s).", outcome.added);
+            if !outcome.skipped.is_empty() {
+                eprintln!("Skipped {} unresolved path(s):", outcome.skipped.len());
+                for s in &outcome.skipped {
+                    eprintln!("  {s}");
+                }
+                std::process::exit(1);
+            }
         }
-        cli::Commands::Rm { paths: rm_paths } => {
+        cli::Commands::Rm {
+            paths: rm_paths,
+            yes,
+        } => {
+            if !yes && !util::confirm("Remove the given root(s) and purge their indexed entries?")?
+            {
+                println!("Aborted (re-run with --yes to skip confirmation).");
+                return Ok(());
+            }
+            let _lock = store::StoreLock::acquire(&paths.store_path)?;
             let mut cfg = config::load(&paths.config_path)
                 .with_context(|| "config not found; run `catalog init`")?;
             let removed = roots::remove_roots(&mut cfg, &rm_paths)?;
@@ -65,6 +95,7 @@ fn main() -> Result<()> {
             full,
             one_filesystem,
         } => {
+            let _lock = store::StoreLock::acquire(&paths.store_path)?;
             let cfg = config::load(&paths.config_path)
                 .with_context(|| "config not found; run `catalog init`")?;
             let mut store = store::Store::load(&paths.store_path)?;
@@ -89,17 +120,16 @@ fn main() -> Result<()> {
             let cfg = config::load(&paths.config_path)
                 .with_context(|| "config not found; run `catalog init`")?;
             let store = store::Store::load(&paths.store_path)?;
-            let results = search::search(
-                &store,
-                &cfg,
-                &query,
-                ext.as_deref(),
-                after.as_deref(),
-                before.as_deref(),
+            warn_if_degraded(&store);
+            let filters = search::SearchFilters {
+                ext: ext.as_deref(),
+                after: after.as_deref(),
+                before: before.as_deref(),
                 min_size,
                 max_size,
-                root.as_deref(),
-            )?;
+                root: root.as_deref(),
+            };
+            let results = search::search(&store, &cfg, &query, &filters)?;
             let use_json = json || matches!(cfg.output, config::OutputMode::Json);
             output::print_entries(&results, use_json, long)?;
         }
@@ -112,6 +142,7 @@ fn main() -> Result<()> {
             let cfg = config::load(&paths.config_path)
                 .with_context(|| "config not found; run `catalog init`")?;
             let store = store::Store::load(&paths.store_path)?;
+            warn_if_degraded(&store);
             let results = search::recent(&store, &cfg, days, limit)?;
             let use_json = json || matches!(cfg.output, config::OutputMode::Json);
             output::print_entries(&results, use_json, long)?;
@@ -121,6 +152,7 @@ fn main() -> Result<()> {
             full,
             one_filesystem,
         } => {
+            let _lock = store::StoreLock::acquire(&paths.store_path)?;
             let cfg = config::load(&paths.config_path)
                 .with_context(|| "config not found; run `catalog init`")?;
             let mut store = store::Store::load(&paths.store_path)?;
@@ -141,6 +173,7 @@ fn main() -> Result<()> {
         }
         cli::Commands::Export { output } => {
             let store = store::Store::load(&paths.store_path)?;
+            warn_if_degraded(&store);
             let json = store.export_json()?;
             match output {
                 Some(path) => {
@@ -160,7 +193,16 @@ fn main() -> Result<()> {
                 }
             }
         }
-        cli::Commands::Prune => {
+        cli::Commands::Prune { yes } => {
+            if !yes
+                && !util::confirm(
+                    "This permanently removes all indexed data (config is kept). Continue?",
+                )?
+            {
+                println!("Aborted (re-run with --yes to skip confirmation).");
+                return Ok(());
+            }
+            let _lock = store::StoreLock::acquire(&paths.store_path)?;
             let removed = store::prune_store(&paths.store_path)?;
             if removed == 0 {
                 println!("No store found to remove.");
@@ -168,7 +210,17 @@ fn main() -> Result<()> {
                 println!("Pruned {} store file(s).", removed);
             }
         }
-        cli::Commands::Analyze { path, top, files, json, raw, tui } => {
+        cli::Commands::Analyze {
+            path,
+            top,
+            files,
+            json,
+            raw,
+            tui,
+        } => {
+            // Analyze re-indexes (and saves) when the index is stale, so it holds the
+            // write lock for the duration — including the interactive TUI session.
+            let _lock = store::StoreLock::acquire(&paths.store_path)?;
             let cfg = config::load(&paths.config_path)
                 .with_context(|| "config not found; run `catalog init`")?;
             let mut store = store::Store::load(&paths.store_path)?;
@@ -176,11 +228,8 @@ fn main() -> Result<()> {
                 Some(p) => Some(util::normalize_path_allow_missing(&p)?),
                 None => None,
             };
-            let stale = store::index_is_stale(
-                &store.data,
-                filter.as_deref(),
-                chrono::Duration::days(1),
-            );
+            let stale =
+                store::index_is_stale(&store.data, filter.as_deref(), chrono::Duration::days(1));
             let use_tui = tui || (!json && !raw);
             if use_tui {
                 let browse_index = if stale {

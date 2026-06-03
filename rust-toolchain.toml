@@ -1,0 +1,6 @@
+[toolchain]
+# Pin the toolchain so local builds and CI lint/format with the exact same
+# compiler — clippy/rustfmt lints drift between releases, and a mismatch let a
+# 1.95-only lint slip past a 1.96 local check. rustup auto-installs this version.
+channel = "1.96.0"
+components = ["clippy", "rustfmt"]

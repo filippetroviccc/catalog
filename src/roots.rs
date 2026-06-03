@@ -5,14 +5,23 @@ use anyhow::Result;
 use chrono::Local;
 use std::collections::{HashMap, HashSet};
 
-pub fn add_roots(cfg: &mut Config, paths: &[String]) -> Result<usize> {
+/// Outcome of [`add_roots`]: how many roots were added, and any inputs that were
+/// skipped because they could not be resolved (e.g. the path does not exist).
+pub struct AddOutcome {
+    pub added: usize,
+    pub skipped: Vec<String>,
+}
+
+pub fn add_roots(cfg: &mut Config, paths: &[String]) -> Result<AddOutcome> {
     let mut added = 0;
+    let mut skipped = Vec::new();
     let mut existing: HashSet<String> = cfg.roots.iter().cloned().collect();
     for p in paths {
         let normalized = match normalize_path(p) {
             Ok(path) => path,
             Err(err) => {
                 tracing::warn!("skip missing path {} ({})", p, err);
+                skipped.push(format!("{p} ({err})"));
                 continue;
             }
         };
@@ -22,7 +31,7 @@ pub fn add_roots(cfg: &mut Config, paths: &[String]) -> Result<usize> {
             added += 1;
         }
     }
-    Ok(added)
+    Ok(AddOutcome { added, skipped })
 }
 
 pub fn remove_roots(cfg: &mut Config, paths: &[String]) -> Result<usize> {
@@ -78,7 +87,9 @@ pub fn sync_roots(store: &mut StoreData, cfg: &Config, preset_name: Option<Strin
             .collect();
 
         store.roots.retain(|r| !removed_root_ids.contains(&r.id));
-        store.files.retain(|f| !removed_root_ids.contains(&f.root_id));
+        store
+            .files
+            .retain(|f| !removed_root_ids.contains(&f.root_id));
         store
             .file_tags
             .retain(|ft| !removed_file_ids.contains(&ft.file_id));

@@ -34,6 +34,9 @@ pub enum Commands {
     Rm {
         #[arg(required = true)]
         paths: Vec<String>,
+        /// Skip the confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
     /// Index configured roots
     Index {
@@ -94,7 +97,11 @@ pub enum Commands {
         output: Option<String>,
     },
     /// Remove all stored index state
-    Prune,
+    Prune {
+        /// Skip the confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
     /// Analyze disk usage
     Analyze {
         /// Path to analyze (defaults to configured roots)
@@ -127,12 +134,13 @@ pub enum Preset {
     MacosFull,
 }
 
-impl Preset {
-    pub fn to_string(&self) -> String {
-        match self {
-            Preset::MacosUserAdditions => "macos-user-additions".to_string(),
-            Preset::MacosDeep => "macos-deep".to_string(),
-            Preset::MacosFull => "macos-full".to_string(),
-        }
+impl std::fmt::Display for Preset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Preset::MacosUserAdditions => "macos-user-additions",
+            Preset::MacosDeep => "macos-deep",
+            Preset::MacosFull => "macos-full",
+        };
+        f.write_str(name)
     }
 }
