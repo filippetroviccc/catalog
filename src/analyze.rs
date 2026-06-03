@@ -233,7 +233,7 @@ impl Analyzer {
                 size,
             })
             .collect::<Vec<_>>();
-        root_entries.sort_by(|a, b| b.size.cmp(&a.size));
+        root_entries.sort_by_key(|r| Reverse(r.size));
         AnalysisResult {
             total_scanned: self.total_scanned,
             roots: root_entries,
@@ -341,7 +341,7 @@ pub fn analyze_store_with_progress(
         let file_path = Path::new(&file.abs_path);
         analyzer.ingest_file(root_path, file_path, size);
         processed += 1;
-        if processed % 50_000 == 0
+        if processed.is_multiple_of(50_000)
             && let Some(cb) = progress.as_deref_mut()
         {
             cb(processed);
@@ -388,7 +388,7 @@ pub fn browse_index_from_store_with_progress(
         let file_path = Path::new(&file.abs_path);
         builder.ingest_file(root_path, file_path, size);
         processed += 1;
-        if processed % 50_000 == 0
+        if processed.is_multiple_of(50_000)
             && let Some(cb) = progress.as_deref_mut()
         {
             cb(processed);
@@ -455,7 +455,7 @@ fn analyze_store_with_cache(
         top_files_acc.push(file.abs_path.clone(), size);
 
         processed += 1;
-        if processed % 50_000 == 0
+        if processed.is_multiple_of(50_000)
             && let Some(cb) = progress.as_deref_mut()
         {
             cb(processed);
@@ -485,7 +485,7 @@ fn analyze_store_with_cache(
             size,
         })
         .collect::<Vec<_>>();
-    root_entries.sort_by(|a, b| b.size.cmp(&a.size));
+    root_entries.sort_by_key(|r| Reverse(r.size));
 
     AnalysisResult {
         total_scanned,
@@ -543,7 +543,7 @@ fn browse_index_from_cache(
         file_sizes.insert(PathBuf::from(&file.abs_path), size);
 
         processed += 1;
-        if processed % 50_000 == 0
+        if processed.is_multiple_of(50_000)
             && let Some(cb) = progress.as_deref_mut()
         {
             cb(processed);
@@ -691,7 +691,7 @@ impl TopN {
             .into_iter()
             .map(|(Reverse(size), path)| UsageEntry { path, size })
             .collect::<Vec<_>>();
-        items.sort_by(|a, b| b.size.cmp(&a.size));
+        items.sort_by_key(|i| Reverse(i.size));
         items
     }
 }

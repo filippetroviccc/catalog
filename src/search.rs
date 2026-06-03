@@ -127,7 +127,7 @@ pub fn search(
         });
     }
 
-    out.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+    out.sort_by_key(|e| std::cmp::Reverse(e.mtime));
     Ok(out)
 }
 
@@ -168,7 +168,7 @@ pub fn recent(
         });
     }
 
-    out.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+    out.sort_by_key(|e| std::cmp::Reverse(e.mtime));
     out.truncate(limit as usize);
     Ok(out)
 }

@@ -280,10 +280,8 @@ fn handle_key(app: &mut BrowserApp, key: KeyEvent) -> bool {
         | KeyEvent {
             code: KeyCode::Char('b'),
             ..
-        } => {
-            if app.can_go_back() {
-                app.go_back();
-            }
+        } if app.can_go_back() => {
+            app.go_back();
         }
         _ => {}
     }
