@@ -1,4 +1,5 @@
 use crate::search::SearchEntry;
+use crate::util::human_size;
 use anyhow::Result;
 use chrono::{Local, TimeZone};
 
@@ -32,24 +33,13 @@ pub fn print_entries(entries: &[SearchEntry], json: bool, long: bool) -> Result<
             let mtime = dt
                 .map(|d| d.format("%Y-%m-%d").to_string())
                 .unwrap_or_else(|| "-".to_string());
-            println!("{}  {}  {}", e.path, human_size(e.size), mtime);
+            println!(
+                "{}  {}  {}",
+                e.path,
+                human_size(e.size.max(0) as u64),
+                mtime
+            );
         }
     }
     Ok(())
-}
-
-fn human_size(bytes: i64) -> String {
-    let size = if bytes < 0 { 0.0 } else { bytes as f64 };
-    let units = ["B", "KB", "MB", "GB", "TB"];
-    let mut value = size;
-    let mut idx = 0;
-    while value >= 1024.0 && idx < units.len() - 1 {
-        value /= 1024.0;
-        idx += 1;
-    }
-    if idx == 0 {
-        format!("{}{}", bytes.max(0), units[idx])
-    } else {
-        format!("{:.1}{}", value, units[idx])
-    }
 }

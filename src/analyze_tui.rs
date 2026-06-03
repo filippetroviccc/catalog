@@ -1,15 +1,21 @@
-use crate::analyze::{BrowseEntry, BrowseIndex, human_size};
+use crate::analyze::{BrowseEntry, BrowseIndex};
+use crate::util::human_size;
 use anyhow::Result;
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    MouseButton, MouseEventKind,
+};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::Frame;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
-use ratatui::Terminal;
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -25,7 +31,11 @@ pub fn run_browse_tui(index: &BrowseIndex, start_path: Option<PathBuf>) -> Resul
     let result = run_app(&mut terminal, &mut app);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     result
@@ -95,7 +105,9 @@ impl<'a> BrowserApp<'a> {
     }
 
     fn open_selected(&mut self) {
-        let Some(idx) = self.state.selected() else { return; };
+        let Some(idx) = self.state.selected() else {
+            return;
+        };
         let entry = match self.entries.get(idx) {
             Some(e) => e,
             None => return,
@@ -106,14 +118,22 @@ impl<'a> BrowserApp<'a> {
         self.history.push(self.current_path.clone());
         self.current_path = Some(entry.path.clone());
         self.refresh();
-        self.state.select(if self.entries.is_empty() { None } else { Some(0) });
+        self.state.select(if self.entries.is_empty() {
+            None
+        } else {
+            Some(0)
+        });
     }
 
     fn go_back(&mut self) {
         if let Some(prev) = self.history.pop() {
             self.current_path = prev;
             self.refresh();
-            self.state.select(if self.entries.is_empty() { None } else { Some(0) });
+            self.state.select(if self.entries.is_empty() {
+                None
+            } else {
+                Some(0)
+            });
         }
     }
 
@@ -170,7 +190,10 @@ impl<'a> BrowserApp<'a> {
     }
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut BrowserApp) -> Result<()> {
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut BrowserApp,
+) -> Result<()> {
     loop {
         terminal.draw(|f| draw_ui(f, app))?;
 
@@ -304,15 +327,18 @@ fn draw_ui(frame: &mut Frame, app: &mut BrowserApp) {
             .map(|entry| {
                 let size = human_size(entry.size);
                 let name = app.display_name(entry);
-                let label = if entry.is_dir { format!("{}/", name) } else { name };
+                let label = if entry.is_dir {
+                    format!("{}/", name)
+                } else {
+                    name
+                };
                 let line = format!("{:>width$}  {}", size, label, width = max_size_len);
                 ListItem::new(line)
             })
             .collect()
     };
 
-    let list = List::new(items)
-        .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
+    let list = List::new(items).highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
     app.list_area = chunks[1];
     frame.render_stateful_widget(list, chunks[1], &mut app.state);
 

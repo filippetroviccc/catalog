@@ -221,23 +221,11 @@ fn default_excludes() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temp_dir(prefix: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir()
-            .join(format!("catalog_test_{}_{}_{}", prefix, std::process::id(), nanos));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     #[test]
     fn config_round_trip() {
-        let dir = temp_dir("config");
-        let path = dir.join("config.toml");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
 
         let cfg = Config {
             version: 1,
