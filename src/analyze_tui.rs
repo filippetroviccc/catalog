@@ -260,11 +260,7 @@ fn handle_key(app: &mut BrowserApp, key: KeyEvent) -> bool {
         } => app.move_to(0),
         KeyEvent {
             code: KeyCode::End, ..
-        } => {
-            if !app.entries.is_empty() {
-                app.move_to(app.entries.len() - 1)
-            }
-        }
+        } if !app.entries.is_empty() => app.move_to(app.entries.len() - 1),
         KeyEvent {
             code: KeyCode::Enter,
             ..
